@@ -1,0 +1,12 @@
+{
+  "Chronos": 74,
+  "PatchTST": 54,
+  "AutoARIMA": 8,
+  "iTransformer": 31,
+  "Autoformer": 10,
+  "DLinear": 28,
+  "TimesNet": 24,
+  "Theta": 4,
+  "DynamicOptimizedTheta": 3,
+  "SeasonalNaive": 3
+}

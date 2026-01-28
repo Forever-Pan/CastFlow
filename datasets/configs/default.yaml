@@ -1,0 +1,136 @@
+data:
+  timestamp_col: date
+  target_col: real_power
+  history_window: 96
+  forecast_window: 96
+  seasonal_period: 96
+  train_ratio: 0.7
+  initial_train_ratio: 0.4
+  # Normalize target (StandardScaler) to align with CastAgent预训练权重的分布与指标对比
+  standardize_target: true
+  standardize_exog: true
+  outlier_threshold: 3.0
+  physical_priors_enabled: true
+  rotor_radius_m: 50.0
+  cut_in_speed: 3.0
+  rated_speed: 12.0
+  cut_out_speed: 25.0
+  rated_power: null
+  yaw_misalignment_power_k: 1.5
+  turbulence_penalty_c: 0.2
+  pitch_penalty_slope: 0.02
+  derive_v3: true
+  derive_density_power: true
+  derive_yaw_mismatch: true
+  derive_direction_sincos: true
+  derive_ti_features: true
+  derive_pitch_penalty: true
+  derive_rotor_lambda: true
+training:
+  metric: mse
+  random_search_trials: 20
+  seed: 42
+  models:
+    - name: seasonal_naive
+      kind: baseline
+      params:
+        seasonal_period: 96
+    - name: historic_average
+      kind: baseline
+      params: {}
+    - name: zero
+      kind: baseline
+      params: {}
+    - name: holtwinters
+      kind: ets
+      params:
+        trend: null
+        seasonal: add
+        seasonal_periods: 96
+    - name: ces
+      kind: ces
+      params:
+        trend: null
+        seasonal: add
+        seasonal_periods: 96
+    - name: theta
+      kind: theta
+      params:
+        alpha: 0.2
+    - name: croston
+      kind: croston
+      params:
+        alpha: 0.3
+    - name: prophet
+      kind: prophet
+      params:
+        seasonality_mode: additive
+    - name: arima
+      kind: arima
+      params:
+        # Use (1,1,1) without seasonal order as a safer default similar to AutoARIMA heuristic
+        order: [1, 1, 1]
+        seasonal_order: [0, 0, 0, 0]
+    - name: xgb
+      kind: xgb
+      params:
+        n_estimators: 200
+        max_depth: 5
+    - name: Autoformer
+      kind: external_dl
+      params:
+        # Checkpoint path will be resolved relative to castmaster/DeepLearningCheckpoints if not absolute
+        ckpt_dir: "long_term_forecast_windy_96_96_Autoformer_windy_ftS_sl96_ll48_pl96_dm512_nh8_el2_dl1_df2048_expand2_dc4_fc3_ebtimeF_dtTrue_Exp_0"
+    - name: DLinear
+      kind: external_dl
+      params:
+        ckpt_dir: "long_term_forecast_windy_96_96_DLinear_windy_ftS_sl96_ll48_pl96_dm512_nh8_el2_dl1_df2048_expand2_dc4_fc3_ebtimeF_dtTrue_Exp_0"
+    - name: iTransformer
+      kind: external_dl
+      params:
+        ckpt_dir: "long_term_forecast_windy_96_96_iTransformer_windy_ftS_sl96_ll48_pl96_dm128_nh8_el2_dl1_df128_expand2_dc4_fc3_ebtimeF_dtTrue_Exp_0"
+    - name: PatchTST
+      kind: external_dl
+      params:
+        ckpt_dir: "long_term_forecast_windy_96_96_PatchTST_windy_ftS_sl96_ll48_pl96_dm512_nh2_el1_dl1_df2048_expand2_dc4_fc3_ebtimeF_dtTrue_Exp_0"
+    - name: TimesNet
+      kind: external_dl
+      params:
+        ckpt_dir: "long_term_forecast_windy_96_96_TimesNet_windy_ftS_sl96_ll48_pl96_dm16_nh8_el2_dl1_df32_expand2_dc4_fc3_ebtimeF_dtTrue_Exp_0"
+    - name: timesfm_local
+      kind: foundation_timesfm
+      params:
+        # Resolved relative to castmaster/foundation_models
+        model_path: "timesfm"
+    - name: chronos_local
+      kind: foundation_chronos
+      params:
+        model_path: "chronos-bolt-base"
+    - name: sundial_local
+      kind: foundation_sundial
+      params:
+        model_path: "sundial-base-128m"
+        code_dir: "sundial-base-128m"
+memory:
+  enable_vector_store: true
+  enable_strategy_graph: true
+  top_k: 5
+  embedding: stats
+  case_n_clusters: 6
+  max_stored_windows: 50  # 最多存储50个历史窗口到VectorStore
+  similarity_threshold: 2.0  # 规划继承的相似度阈值（已降低，使继承更宽松）
+planning:
+  enable_llm: true
+  llm_model: gpt-4o-mini
+  long_term_update_every: 1
+  llm_as_primary: true
+  top_k_exog: 3
+  use_featuretools_time_features: true
+  # 并行LLM调用配置（仅测试阶段）
+  enable_parallel_llm: true  # 是否启用并行LLM调用
+  parallel_batch_size: 1  # 并行批次大小（同时处理的窗口数，设置为1以确保API调用不会中断）
+  # 测试集大小限制配置
+  max_test_samples: 50  # 限制测试窗口数量为50个（对应4896个时间点：96 + 50*96 = 4896）
+  compute_auxiliary_metrics: false  # 设置为true以计算和保存辅助模型指标
+  enable_visualization: true  # 是否启用测试集可视化（为每个测试窗口生成图表）
+  save_llm_chain_of_thought: true  # 是否保存LLM思维链（默认开启，保存每个测试样本的完整思维过程）

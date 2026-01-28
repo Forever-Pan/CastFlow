@@ -1,0 +1,61 @@
+# Core Data Science & Math
+numpy>=1.24.0
+pandas>=2.0.0
+scipy>=1.10.0
+scikit-learn>=1.3.0
+statsmodels>=0.14.0
+openpyxl>=3.1.0  # For Excel file support in pandas
+
+# Deep Learning Frameworks
+# Torch 2.1+ is required for modern Transformers and Foundation Models.
+# Note: Specific CUDA versions (e.g., +cu118, +cu121) may need to be installed manually if required.
+torch>=2.1.0
+accelerate>=0.26.0
+einops>=0.7.0
+
+# Transformers & HuggingFace Ecosystem
+transformers>=4.43.0
+safetensors>=0.4.3
+huggingface_hub>=0.20.0
+tokenizers>=0.19.0
+sentencepiece>=0.1.99
+datasets>=2.14.0  # For SFT training data processing
+peft>=0.6.0  # For LoRA fine-tuning
+
+# Time Series Models (Classical & ML)
+prophet>=1.1.5
+xgboost>=2.0.0
+lightgbm>=4.0.0
+tsfeatures>=0.4.0
+featuretools>=1.28.0
+
+# Foundation Models (Time Series)
+# TimesFM (Google)
+# Note: timesfm depends on JAX. Python < 3.12 is recommended for better compatibility.
+timesfm>=1.0.0; python_version < "3.12"
+
+# Chronos (Amazon/GluonTS)
+chronos-forecasting>=0.0.1
+
+# Optimization & Experimentation
+optuna>=3.5.0
+tqdm>=4.66.0
+
+# Configuration & Utilities
+pyyaml>=6.0
+pydantic>=2.6
+python-dateutil>=2.8
+holidays>=0.33
+python-dotenv>=1.0
+orjson>=3.9.0  # Fast JSON serialization for large datasets
+
+# Vector Database
+faiss-cpu>=1.7.4
+
+# LLM Agents
+openai>=1.40.0
+smolagents>=0.5.0
+
+# Visualization
+matplotlib>=3.8.0
+seaborn>=0.13.0

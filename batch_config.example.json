@@ -1,0 +1,28 @@
+{
+    "datasets": [
+        {
+            "name": "windy",
+            "memory_file": "memory/windy/windy_memory.json",
+            "train_file": "datasets/windy_power_train.csv",
+            "output_file": "datasets/past/windy/grok.csv",
+            "date_column": "date",
+            "target_column": "real_power",
+            "forecast_length": 96,
+            "time_interval": 15,
+            "verbose": true,
+            "skip_missing": false
+        },
+        {
+            "name": "solar",
+            "memory_file": "memory/solar/solar_memory.json",
+            "train_file": "datasets/solar_power_train.csv",
+            "output_file": "datasets/past/solar/grok.csv",
+            "date_column": "timestamp",
+            "target_column": "power",
+            "forecast_length": 48,
+            "time_interval": 30,
+            "verbose": true,
+            "skip_missing": false
+        }
+    ]
+}

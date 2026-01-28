@@ -1,0 +1,14 @@
+{
+  "PatchTST": 51,
+  "Chronos": 86,
+  "HistoricAverage": 5,
+  "DLinear": 27,
+  "iTransformer": 26,
+  "DynamicOptimizedTheta": 5,
+  "AutoARIMA": 9,
+  "TimesNet": 15,
+  "Theta": 8,
+  "Autoformer": 4,
+  "SeasonalNaive": 2,
+  "CrostonClassic": 1
+}

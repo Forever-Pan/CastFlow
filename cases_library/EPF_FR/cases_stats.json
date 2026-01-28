@@ -1,0 +1,13 @@
+{
+  "iTransformer": 64,
+  "Chronos": 64,
+  "DLinear": 16,
+  "PatchTST": 60,
+  "SeasonalNaive": 1,
+  "TimesNet": 24,
+  "Theta": 1,
+  "AutoARIMA": 3,
+  "Autoformer": 4,
+  "CrostonClassic": 1,
+  "HistoricAverage": 1
+}

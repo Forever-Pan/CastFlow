@@ -1,0 +1,4 @@
+name: CastMaster
+channels:
+  - defaults
+prefix: /data/Forever_Pan/anaconda3/envs/CastMaster

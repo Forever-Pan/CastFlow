@@ -447,11 +447,9 @@ def compute_contrastive_reward(
     elif dataset_name == "ETTm1":
         upper_bound = 3.5
     
-    # 对比项： (mse_small - mse_ans) / (upper_bound / 500)
-    # 按你的要求，这一项最终应被bound到 [-0.5, 0.5]
     denom = upper_bound if upper_bound > 0 else 1.0
     contrast_raw = (mse_small - mse_ans) / denom * 100
-    contrast_term = max(min(contrast_raw, 0.5), -0.5)
+    contrast_term = max(min(contrast_raw, 0.2), -0.2)
     
     # 总reward = 绝对MSE reward + 对比项
     reward = base_reward + contrast_term

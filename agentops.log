@@ -388,11 +388,11 @@
 2026-01-28 17:58:08,234 - INFO - Session Replay for ro-6a99622ed86e trace: https://app.agentops.ai/sessions?trace_id=69a64b84a2442dc0e212f6aa6221790f
 2026-01-28 18:00:08,744 - INFO - Session Replay for ro-5cb7bab491c9.session trace: https://app.agentops.ai/sessions?trace_id=d8b19ba3f25ce5b1a454b9de1254de75
 2026-01-28 18:03:55,140 - INFO - Session Replay for ro-71de9d175401 trace: https://app.agentops.ai/sessions?trace_id=b5f608f73456b6470174944d3cf3a646
-2026-01-28 18:04:50,440 - INFO - Session Replay for ro-49b8a65bb763.session trace: https://app.agentops.ai/sessions?trace_id=388f311b6a6de991406cd747936014f8
-2026-01-28 13:03:23,387 - INFO - Session Replay for ro-629996699d05 trace: https://app.agentops.ai/sessions?trace_id=3fc34675d4a62b0e4c91a7bf00603d8d
-2026-01-28 13:05:25,828 - INFO - Session Replay for ro-d2d2d80bfd81.session trace: https://app.agentops.ai/sessions?trace_id=9106fa10ea3d8c338b56d6016110c1be
-2026-01-28 13:07:26,859 - INFO - Session Replay for ro-06ca6dc88a5e trace: https://app.agentops.ai/sessions?trace_id=1c4c0d4ae092e658a84a141b4e8bda2d
-2026-01-28 13:09:40,559 - INFO - Session Replay for ro-6662b6c3667b.session trace: https://app.agentops.ai/sessions?trace_id=26cd493497f5cb49e3a7802c9c6d46b5
+2026-01-28 18:06:12,928 - INFO - Session Replay for ro-0e0646b21276.session trace: https://app.agentops.ai/sessions?trace_id=97b7986b011417f7a23bb3eb4d3cf4d9
+2026-01-28 18:09:58,143 - INFO - Session Replay for ro-c5a2e5ee0500 trace: https://app.agentops.ai/sessions?trace_id=68cd1b9be0e3a7d913fe42d485baaa5b
+2026-01-28 18:11:44,308 - INFO - Session Replay for ro-7049a0486aeb.session trace: https://app.agentops.ai/sessions?trace_id=56bbff110782cdc8b8c0d6c09f79f5c7
+2026-01-28 18:15:24,391 - INFO - Session Replay for ro-988d08191d44 trace: https://app.agentops.ai/sessions?trace_id=97d288efa2f50d42d56c8fa208b8f844
+2026-01-28 18:17:31,697 - INFO - Session Replay for ro-97f12fc43bf0.session trace: https://app.agentops.ai/sessions?trace_id=8da0e8e1d0a6fd6ab5f75eec6f1b34c7
 2026-01-28 13:11:27,071 - INFO - Session Replay for ro-9c81889a33dc trace: https://app.agentops.ai/sessions?trace_id=7d9c04760b5ffa0b911972ddc2e062a1
 2026-01-28 13:13:37,919 - INFO - Session Replay for ro-0e6d5756db8a.session trace: https://app.agentops.ai/sessions?trace_id=9cd995744bb951eead38d62d4de3dc2f
 2026-01-28 13:15:46,588 - INFO - Session Replay for ro-94800b3111b7 trace: https://app.agentops.ai/sessions?trace_id=7837168f974c571e69a79d62a558b9b6
@@ -490,3 +490,4 @@
 2026-01-28 18:00:31,288 - INFO - Session Replay for ro-908ad1109d3e.session trace: https://app.agentops.ai/sessions?trace_id=0e0e0cca097e8cbcb4a1e4820100cc1a
 2026-01-28 18:02:31,890 - INFO - Session Replay for ro-68364ea9feb3 trace: https://app.agentops.ai/sessions?trace_id=dd1b4c96ca920ff9603e973aa5411e3c
 2026-01-28 18:04:10,238 - INFO - Session Replay for ro-d596d1737097.session trace: https://app.agentops.ai/sessions?trace_id=23df2f165194cb42138d7f10ddae05d3
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  

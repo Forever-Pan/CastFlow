@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "CastFlow"
+version = "0.1.0"
+description = "CastFlow: role-specialized agentic workflows for time series forecasting"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+training = [
+  "torch>=2.1",
+  "transformers>=4.43",
+  "datasets>=2.14",
+  "peft>=0.6",
+  "pyarrow>=12",
+]
+rlvr = [
+  "agentlightning",
+  "pyarrow>=12",
+]
+
+[project.scripts]
+castflow = "scripts.cli:main"
+scripts = "scripts.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scripts*"]

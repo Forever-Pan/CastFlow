@@ -13,20 +13,6 @@ The implementation in this directory follows the paper naming and workflow:
 
 ![CastFlow overview](assets/figures/framework.png)
 
-
-
-## What Is Not Included
-
-This repository intentionally does **not** ship private benchmark datasets or the large local weights used by `scripts/anchorer_runtime`.
-
-You must provide:
-
-- Raw train/test CSV files under `data/raw/train` and `data/raw/test`.
-- Local forecasting backbone weights, for example Qwen3-4B, under `models/Qwen3-4B` or another relative path you choose.
-- Time-series foundation-model weights required by `scripts/anchorer_runtime`, placed into that runtime tree as described below.
-
-The code expects these paths to exist at runtime; no download is triggered automatically.
-
 ## Directory Layout
 
 ```text
@@ -48,7 +34,7 @@ CastFlow/
 
 ## Dataset Placement
 
-The default registered benchmark suite follows the TPAMI setting: chronological 7:1:2 split, cross-domain joint training, and the following lookback/horizon/stride settings.
+The default registered benchmark suite follows the setting: chronological 7:1:2 split, cross-domain joint training, and the following lookback/horizon/stride settings.
 
 | Dataset | Train CSV | Test CSV | Lookback | Horizon | Stride |
 | --- | --- | --- | ---: | ---: | ---: |
@@ -75,7 +61,7 @@ Place the trainable local model somewhere accessible, for example:
 models/Qwen3-4B
 ```
 
-The TPAMI configuration uses **Qwen3-4B** as the local trainable forecasting backbone. 
+The configuration uses **Qwen3-4B** as the local trainable forecasting backbone. 
 
 ### Foundational Anchorer Runtime
 
@@ -138,17 +124,9 @@ MODEL=forecast
 LOCAL_MODEL_BASE_URL=http://localhost:8002/v1
 LOCAL_MODEL_NAME=castflow-forecast
 LOCAL_MODEL_API_KEY=EMPTY
-
-CASTFLOW_USE_API=true
-CASTFLOW_API_TIMEOUT=60
-CASTFLOW_PLANNER_MAX_TOKENS=1200
-CASTFLOW_FORECASTING_MAX_TOKENS=7000
-CASTFLOW_REFLECTION_MAX_TOKENS=800
 ```
 
-Do not commit real API keys.
-
-## TPAMI Default Parameters
+## Default Parameters
 
 These defaults are now reflected in the CLI and training configs.
 
@@ -163,7 +141,6 @@ These defaults are now reflected in the CLI and training configs.
 | RLVR | GRPO, group size `G=8`, temperature `1.0`, learning rate `2e-6`, KL coefficient `0.0`, 3 epochs |
 | Forecast output length | max completion length 5000 in the paper; runtime default allows up to 7000 tokens for safety |
 
-On 2 A800 GPUs, the paper-level SFT batch can be implemented directly. On 24GB GPUs, use micro-batch 1 with gradient accumulation to keep the effective global batch size at 8.
 
 ## End-to-End Workflow
 
@@ -309,31 +286,6 @@ Outputs:
 - Console summary with aggregate MSE/MAE.
 - Optional row-level metric CSV at `predictions/de_metrics.csv`.
 
-## Single-Domain Development
-
-Cross-domain is the default training path. For debugging a single domain:
-
-```bash
-python -m scripts build-memory \
-  --dataset DE \
-  --anchor-library case_library/EPF_DE/anchor_library.json \
-  --output memory/DE/memory.json \
-  --max-windows 5 \
-  --verbose-samples
-```
-
-```bash
-python -m scripts export-memory-data \
-  --memory memory/DE/memory.json \
-  --output data/sft/DE_sft.csv
-```
-
-```bash
-python -m scripts prepare-rl-data \
-  --input data/sft/DE_sft.csv \
-  --output data/rl/DE_rl.parquet \
-  --dataset-name DE
-```
 
 
 ## Citation

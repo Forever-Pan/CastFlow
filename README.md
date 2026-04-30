@@ -11,7 +11,7 @@ The implementation in this directory follows the paper naming and workflow:
 - **Strategy Memory**: retrieve successful historical tool-use trajectories.
 - **Foundational Anchorer**: retrieve similar historical cases and ensemble classical, deep, and foundation time-series models.
 
-![CastFlow overview](assets/figures/framework.png)
+![CastFlow overview](assets/figures/framework.pdf)
 
 
 

@@ -13,7 +13,7 @@
 
 ---
 
-## Workflow Overview ??
+## Workflow Overview 🔁
 
 The implementation in this directory follows the paper naming and workflow:
 
@@ -26,7 +26,7 @@ The implementation in this directory follows the paper naming and workflow:
 | **Strategy Memory** | Retrieve successful historical tool-use trajectories. |
 | **Foundational Anchorer** | Retrieve similar historical cases and ensemble classical, deep, and foundation time-series models. |
 
-## Directory Layout ???
+## Directory Layout 🗂️
 
 ```text
 CastFlow/
@@ -45,7 +45,7 @@ CastFlow/
   predictions/                      Forecast and evaluation outputs
 ```
 
-## Dataset Placement ??
+## Dataset Placement 📊
 
 The default registered benchmark suite follows the setting: chronological 7:1:2 split, cross-domain joint training, and the following lookback/horizon/stride settings.
 
@@ -64,7 +64,7 @@ The default registered benchmark suite follows the setting: chronological 7:1:2 
 
 CSV files should contain one timestamp column named `date` or `time_stamp`. If no timestamp column exists, CastFlow uses the row index. The target column defaults to the last numeric non-timestamp column; use `--target-col` if you need to override it.
 
-## Weight Placement ??
+## Weight Placement 🧠
 
 ### Local Forecasting LLM
 
@@ -87,14 +87,14 @@ scripts/anchorer_runtime/packages/
 
 The anchorer can then build per-domain `case_library/*/anchor_library.json` files. If a model weight is missing, the corresponding anchor model may fail or be skipped depending on the runtime wrapper.
 
-## Environment ??
+## Environment 💻
 
 ```bash
 cd CastFlow
 conda activate <your-env-name>
 ```
 
-## Requirements ??
+## Requirements 📦
 
 | Package | Version / use |
 | --- | --- |
@@ -109,7 +109,7 @@ conda activate <your-env-name>
 
 The package metadata in `pyproject.toml` already defines the core, training, and RLVR dependency groups.
 
-## Installation ??
+## Installation ⚙️
 
 Install the full dependency set from the repository requirements file:
 
@@ -141,7 +141,7 @@ LOCAL_MODEL_NAME=castflow-forecast
 LOCAL_MODEL_API_KEY=EMPTY
 ```
 
-## Default Parameters ???
+## Default Parameters 🎛️
 
 These defaults are now reflected in the CLI and training configs.
 
@@ -156,7 +156,7 @@ These defaults are now reflected in the CLI and training configs.
 | RLVR | GRPO, group size `G=8`, temperature `1.0`, learning rate `2e-6`, KL coefficient `0.0`, 3 epochs |
 | Forecast output length | max completion length 5000 in the paper; runtime default allows up to 7000 tokens for safety |
 
-## End-to-End Workflow ??
+## End-to-End Workflow 🚀
 
 <details open>
 <summary><strong>1. Build The Foundational Anchorer Case Libraries</strong></summary>
@@ -327,6 +327,6 @@ Outputs:
 
 </details>
 
-## Citation ??
+## Citation 📖
 
 If you use CastFlow, cite the corresponding CastFlow paper when it is released.

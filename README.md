@@ -1,19 +1,26 @@
-# CastFlow
+<div align="center">
+  <img src="docs/assets/castflow-mark.svg" width="88" alt="CastFlow mark">
+  <h1>CastFlow</h1>
+  <p>CastFlow is a role-specialized agentic workflow for time series forecasting. It couples a frozen general-purpose reasoning model for planning and reflection with a trainable local forecasting model for evidence-guided numerical refinement.</p>
+  <p><a href="https://forever-pan.github.io/CastFlow/"><strong>Project page</strong></a></p>
+</div>
 
-CastFlow is a role-specialized agentic workflow for time series forecasting. It couples a frozen general-purpose reasoning model for planning and reflection with a trainable local forecasting model for evidence-guided numerical refinement.
+<p align="center">
+  <img src="docs/assets/figures/rendered/framework.png" alt="CastFlow overview" width="920">
+</p>
+
+---
 
 The implementation in this directory follows the paper naming and workflow:
 
-- **Planning**: select diagnostic tools using a frozen external LLM.
-- **Action**: execute the multi-view toolkit and build an ensemble forecast baseline.
-- **Forecasting**: use a fine-tuned local LLM to refine the baseline into a numerical forecast.
-- **Reflection**: validate output structure and evidence alignment, then retry if needed.
-- **Strategy Memory**: retrieve successful historical tool-use trajectories.
-- **Foundational Anchorer**: retrieve similar historical cases and ensemble classical, deep, and foundation time-series models.
-
-**Project page**: https://forever-pan.github.io/CastFlow/
-
-![CastFlow overview](assets/figures/framework.png)
+| Component | Workflow |
+| --- | --- |
+| **Planning** | Select diagnostic tools using a frozen external LLM. |
+| **Action** | Execute the multi-view toolkit and build an ensemble forecast baseline. |
+| **Forecasting** | Use a fine-tuned local LLM to refine the baseline into a numerical forecast. |
+| **Reflection** | Validate output structure and evidence alignment, then retry if needed. |
+| **Strategy Memory** | Retrieve successful historical tool-use trajectories. |
+| **Foundational Anchorer** | Retrieve similar historical cases and ensemble classical, deep, and foundation time-series models. |
 
 ## Directory Layout
 
@@ -63,7 +70,7 @@ Place the trainable local model somewhere accessible, for example:
 models/Qwen3-4B
 ```
 
-The configuration uses **Qwen3-4B** as the local trainable forecasting backbone. 
+The configuration uses **Qwen3-4B** as the local trainable forecasting backbone.
 
 ### Foundational Anchorer Runtime
 
@@ -85,14 +92,16 @@ conda activate <your-env-name>
 
 ## Requirements
 
-- Python `>=3.10`
-- PyTorch `>=2.1`
-- `transformers>=4.43`
-- `datasets>=2.14`
-- `peft>=0.6`
-- `pyarrow>=12`
-- `agentlightning` for RLVR
-- `vllm` for local forecasting serving
+| Package | Version / use |
+| --- | --- |
+| Python | `>=3.10` |
+| PyTorch | `>=2.1` |
+| `transformers` | `>=4.43` |
+| `datasets` | `>=2.14` |
+| `peft` | `>=0.6` |
+| `pyarrow` | `>=12` |
+| `agentlightning` | for RLVR |
+| `vllm` | for local forecasting serving |
 
 The package metadata in `pyproject.toml` already defines the core, training, and RLVR dependency groups.
 
@@ -143,10 +152,10 @@ These defaults are now reflected in the CLI and training configs.
 | RLVR | GRPO, group size `G=8`, temperature `1.0`, learning rate `2e-6`, KL coefficient `0.0`, 3 epochs |
 | Forecast output length | max completion length 5000 in the paper; runtime default allows up to 7000 tokens for safety |
 
-
 ## End-to-End Workflow
 
-### 1. Build The Foundational Anchorer Case Libraries
+<details open>
+<summary><strong>1. Build The Foundational Anchorer Case Libraries</strong></summary>
 
 This scans all registered train splits and writes one case library per domain.
 
@@ -175,7 +184,10 @@ For a fast dry run:
 python -m scripts build-anchorer --max-windows 5
 ```
 
-### 2. Build Cross-Domain Strategy Memory
+</details>
+
+<details>
+<summary><strong>2. Build Cross-Domain Strategy Memory</strong></summary>
 
 `build-memory` automatically loops over all registered train splits and uses the matching `case_library/*/anchor_library.json`.
 
@@ -191,7 +203,10 @@ Output:
 memory/cross_domain/memory.json
 ```
 
-### 3. Export SFT Data From Memory
+</details>
+
+<details>
+<summary><strong>3. Export SFT Data From Memory</strong></summary>
 
 ```bash
 python -m scripts export-memory-data \
@@ -199,7 +214,10 @@ python -m scripts export-memory-data \
   --output data/sft/cross_domain_sft.csv
 ```
 
-### 4. Supervised Fine-Tuning
+</details>
+
+<details>
+<summary><strong>4. Supervised Fine-Tuning</strong></summary>
 
 Paper-style target: Qwen3-4B, 1 epoch, learning rate `5e-5`, global batch size 8.
 
@@ -213,13 +231,17 @@ torchrun --nproc_per_node=2 --master_port=32588 -m scripts train-sft \
   --learning-rate 5e-5 \
   --num-epochs 1
 ```
+
 Output:
 
 ```text
 models/sft_cross_domain/
 ```
 
-### 5. Prepare RL Data
+</details>
+
+<details>
+<summary><strong>5. Prepare RL Data</strong></summary>
 
 ```bash
 python -m scripts prepare-rl-data \
@@ -227,7 +249,10 @@ python -m scripts prepare-rl-data \
   --output data/rl/cross_domain_rl.parquet
 ```
 
-### 6. RL Training
+</details>
+
+<details>
+<summary><strong>6. RL Training</strong></summary>
 
 ```bash
 python -m scripts train-rlvr \
@@ -241,7 +266,10 @@ python -m scripts train-rlvr \
   --n-gpus-per-node 2
 ```
 
-### 7. Serve The Local Forecasting Model
+</details>
+
+<details>
+<summary><strong>7. Serve The Local Forecasting Model</strong></summary>
 
 Start vLLM before forecasting. The served model name must match `LOCAL_MODEL_NAME` in `.env`.
 
@@ -256,7 +284,10 @@ vllm serve path/to/model \
   --generation-config vllm
 ```
 
-### 8. Forecast A Test CSV
+</details>
+
+<details>
+<summary><strong>8. Forecast A Test CSV</strong></summary>
 
 Forecasting requires an explicit test CSV via `--data`. For registered benchmark filenames such as `EPF_DE_test.csv` and `windy_power_test.csv`, CastFlow automatically infers the dataset defaults for lookback, horizon, seasonal period, and stride from the file path, so these arguments do not need to be passed manually.
 
@@ -270,8 +301,10 @@ python -m scripts forecast \
   --output predictions/de_forecast.csv
 ```
 
+</details>
 
-### 9. Evaluate Forecasts
+<details>
+<summary><strong>9. Evaluate Forecasts</strong></summary>
 
 DE example:
 
@@ -288,7 +321,7 @@ Outputs:
 - Console summary with aggregate MSE/MAE.
 - Optional row-level metric CSV at `predictions/de_metrics.csv`.
 
-
+</details>
 
 ## Citation
 

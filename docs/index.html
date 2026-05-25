@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CastFlow | Role-Specialized Agentic Workflows for Time Series Forecasting</title>
+    <meta name="description" content="CastFlow is a role-specialized agentic workflow for time series forecasting, combining memory, a multi-view toolkit, ensemble anchoring, and workflow-oriented SFT plus RLVR training.">
+    <meta property="og:title" content="CastFlow">
+    <meta property="og:description" content="Learning Role-Specialized Agentic Workflows for Time Series Forecasting.">
+    <meta property="og:type" content="website">
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="assets/styles.css">
+  </head>
+  <body>
+    <header class="site-header" data-elevate>
+      <a class="brand" href="#top" aria-label="CastFlow home">
+        <img src="assets/castflow-mark.svg" alt="" aria-hidden="true">
+        <span>CastFlow</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary navigation">
+        <a href="#abstract">Abstract</a>
+        <a href="#method">Method</a>
+        <a href="#training">Training</a>
+        <a href="#results">Results</a>
+        <a href="#analysis">Analysis</a>
+        <a href="#citation">BibTeX</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div class="container">
+          <p class="eyebrow">TPAMI Submission</p>
+          <h1>CastFlow</h1>
+          <p class="subtitle">Learning Role-Specialized Agentic Workflows for Time Series Forecasting</p>
+          <p class="authors">Bokai Pan, Mingyue Cheng, Zhiding Liu, Shuo Yu, Xiaoyu Tao, Yuchong Wu, Qi Liu, Defu Lian, Enhong Chen</p>
+          <p class="affiliation">State Key Laboratory of Cognitive Intelligence, University of Science and Technology of China</p>
+          <div class="button-row" aria-label="Project links">
+            <a class="button primary" href="assets/paper/CastFlow_TPAMI.pdf">
+              <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 3h8l4 4v14H6z"></path>
+                <path d="M14 3v5h4"></path>
+                <path d="M9 13h6"></path>
+                <path d="M9 17h4"></path>
+              </svg>
+              <span>Paper</span>
+            </a>
+            <a class="button" href="https://github.com/Forever-Pan/CastFlow">
+              <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m8 9-3 3 3 3"></path>
+                <path d="m16 9 3 3-3 3"></path>
+                <path d="m14 5-4 14"></path>
+              </svg>
+              <span>Code</span>
+            </a>
+            <a class="button" href="#citation">
+              <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7 4h10a2 2 0 0 1 2 2v14H7a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"></path>
+                <path d="M9 8h6"></path>
+                <path d="M9 12h5"></path>
+                <path d="M7 20a2 2 0 0 1 0-4h12"></path>
+              </svg>
+              <span>BibTeX</span>
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <section class="teaser" aria-label="System overview">
+        <div class="wide-container">
+          <figure class="paper-figure main-figure">
+            <img src="assets/figures/rendered/framework.png" alt="CastFlow framework overview" loading="eager">
+            <figcaption>
+              <strong>CastFlow system overview.</strong>
+              A frozen reasoning LLM plans tool use and checks final responses; memory retrieves prior successful trajectories; a leakage-aware toolkit builds multi-view evidence and an ensemble baseline; a fine-tuned local LLM performs evidence-conditioned numerical correction.
+              <a href="assets/figures/framework.pdf">Open PDF</a>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="summary-strip" aria-label="Key facts">
+        <div class="container">
+          <div class="summary-item">
+            <strong>4</strong>
+            <span>workflow roles</span>
+          </div>
+          <div class="summary-item">
+            <strong>11</strong>
+            <span>diagnostic tools</span>
+          </div>
+          <div class="summary-item">
+            <strong>10</strong>
+            <span>datasets</span>
+          </div>
+          <div class="summary-item">
+            <strong>21</strong>
+            <span>baselines</span>
+          </div>
+          <div class="summary-item">
+            <strong>9/10</strong>
+            <span>best MSE and MAE</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="abstract">
+        <div class="container narrow">
+          <div class="section-heading centered">
+            <p class="eyebrow">Abstract</p>
+            <h2>Forecasting as evidence-guided correction.</h2>
+          </div>
+          <div class="prose">
+            <p>
+              LLM-based forecasting is often formulated as direct sequence generation: the model receives a historical window and produces future values in a single pass. This formulation makes it difficult to acquire contextual evidence across multiple rounds, inspect intermediate reasoning, combine reliable ensemble priors, or repair invalid forecasts after generation.
+            </p>
+            <p>
+              CastFlow reframes the task as a role-specialized agentic workflow. Planning selects the evidence needed for the current window; Action invokes deterministic diagnostic tools; Forecasting uses a fine-tuned Qwen3-4B local model to revise an ensemble baseline; Reflection verifies format, horizon length, and evidence consistency before returning the final forecast.
+            </p>
+            <p>
+              The key separation is functional rather than cosmetic: a frozen general LLM handles broad reasoning and verification, while the trainable local model focuses on the narrower numerical task of baseline correction. Workflow-oriented SFT and GRPO-based RLVR further teach the forecaster to use retrieved experience, tool evidence, and measurable reward signals.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section soft" aria-labelledby="motivation-title">
+        <div class="container">
+          <div class="section-heading centered">
+            <p class="eyebrow">Motivation</p>
+            <h2 id="motivation-title">Why a workflow instead of one generation?</h2>
+            <p class="lead">
+              Time series forecasting needs more than fluent explanation. A useful model must identify local patterns, compare similar historical cases, reason about covariates and events, and decide when a baseline should be preserved, shifted, or corrected.
+            </p>
+          </div>
+
+          <div class="split motivation-layout">
+            <div class="prose motivation-copy">
+            <p>
+              CastFlow therefore exposes the forecasting process as a chain of inspectable states. The workflow keeps reasoning, evidence acquisition, numerical revision, and validation separate, so each component can be trained, ablated, and audited.
+            </p>
+            <p>
+              This is the central reason for introducing an agentic workflow: the goal is not to make the model produce longer rationales, but to make forecasting decisions depend on explicit evidence and verifiable intermediate artifacts.
+            </p>
+          </div>
+          <figure class="paper-figure">
+            <img src="assets/figures/rendered/motivation.png" alt="Comparison of training-free, fine-tuning, and agentic workflow methods">
+            <figcaption>
+              <strong>Motivation.</strong>
+              CastFlow turns forecasting from one-shot generation into a memory- and tool-supported reasoning loop.
+              <a href="assets/figures/motivation.pdf">Open PDF</a>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section" id="method">
+        <div class="container">
+          <div class="section-heading centered">
+            <p class="eyebrow">Method</p>
+            <h2>A four-role workflow with explicit intermediate artifacts.</h2>
+            <p class="lead">
+              CastFlow assigns each part of the forecasting process to the model or module best suited for it, rather than forcing a single LLM call to plan, analyze, forecast, and self-correct at once.
+            </p>
+          </div>
+
+          <ol class="process">
+            <li>
+              <span>01</span>
+              <h3>Planning</h3>
+              <p>Retrieves successful historical trajectories from strategy memory and decides which tools are needed for the current lookback window.</p>
+            </li>
+            <li>
+              <span>02</span>
+              <h3>Action</h3>
+              <p>Executes deterministic tools to extract temporal statistics, trend signals, covariate effects, residual patterns, and an ensemble forecast baseline.</p>
+            </li>
+            <li>
+              <span>03</span>
+              <h3>Forecasting</h3>
+              <p>Uses the fine-tuned local LLM to revise the ensemble baseline according to retrieved experience, domain context, and tool evidence.</p>
+            </li>
+            <li>
+              <span>04</span>
+              <h3>Reflection</h3>
+              <p>Checks horizon length, output format, and evidence alignment, then triggers bounded correction when the response violates the task contract.</p>
+            </li>
+          </ol>
+
+          <div class="method-grid">
+            <article>
+              <h3>Role specialization</h3>
+              <p>The frozen LLM is preserved for semantic reasoning, tool scheduling, and verification. The trainable local model is reserved for the quantitative subproblem where supervised and reinforcement signals are available: correcting a forecast baseline.</p>
+            </article>
+            <article>
+              <h3>Memory-guided planning</h3>
+              <p>Successful trajectories are stored as procedural experience. At inference time, similar historical cases help the planner reuse effective tool sequences and avoid starting from scratch on every window.</p>
+            </article>
+            <article>
+              <h3>Multi-view toolkit</h3>
+              <p>The toolkit covers ensemble anchoring, statistical and spectral profiling, dynamic pattern monitoring, and residual diagnosis. These tools provide evidence without leaking unavailable future values.</p>
+            </article>
+          </div>
+
+          <div class="table-scroll toolkit-table-wrap" aria-label="Toolkit families">
+            <table class="compact-table">
+              <caption>Multi-view toolkit families</caption>
+              <thead>
+                <tr>
+                  <th>Family</th>
+                  <th>Representative tools</th>
+                  <th>Role in forecasting</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Foundational Anchorer</td>
+                  <td><code>model_auxiliary_tool</code></td>
+                  <td>Retrieves similar cases and ensembles classical, deep, and foundation time-series models into a stable baseline.</td>
+                </tr>
+                <tr>
+                  <td>Statistical and Spectral Profiler</td>
+                  <td><code>statistical_analysis_tool</code>, <code>basic_statistics_tool</code>, <code>data_quality_tool</code>, <code>comprehensive_feature_tool</code></td>
+                  <td>Summarizes distribution, missingness, outliers, stationarity, autocorrelation, spectral entropy, and descriptive features.</td>
+                </tr>
+                <tr>
+                  <td>Dynamics Monitor</td>
+                  <td><code>trend_analysis_tool</code>, <code>changepoint_trend_tool</code>, <code>cross_channel_tool</code>, <code>exogenous_analysis_tool</code>, <code>event_summary_tool</code></td>
+                  <td>Detects trend shifts, lead-lag dependencies, covariate effects, and event-level constraints that justify baseline correction.</td>
+                </tr>
+                <tr>
+                  <td>Residual Diagnoser</td>
+                  <td><code>autoregressive_residual_tool</code></td>
+                  <td>Analyzes train-only residual patterns to expose systematic baseline errors without test leakage.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="section soft" id="training">
+        <div class="container">
+          <div class="section-heading centered">
+            <p class="eyebrow">Training</p>
+            <h2>Workflow-level data turns tool use into trainable behavior.</h2>
+            <p class="lead">
+              CastFlow first collects successful tool-use trajectories through K-parallel exploration, then uses them to train the local forecasting model with SFT and GRPO-based RLVR.
+            </p>
+          </div>
+
+          <div class="training-flow" aria-label="Training pipeline">
+            <div>
+              <strong>Trajectory collection</strong>
+              <span>K-parallel exploration records plans, tool calls, evidence, and successful corrections.</span>
+            </div>
+            <div>
+              <strong>SFT warmup</strong>
+              <span>The local model learns the response protocol and how to condition forecasts on evidence.</span>
+            </div>
+            <div>
+              <strong>GRPO-based RLVR</strong>
+              <span>Candidate forecasts are optimized with verifiable rewards instead of a learned value model.</span>
+            </div>
+            <div>
+              <strong>Hybrid MSE reward</strong>
+              <span>Absolute accuracy and improvement over the ensemble baseline are balanced to reward useful correction.</span>
+            </div>
+          </div>
+
+          <div class="figure-pair">
+            <figure class="paper-figure">
+              <img src="assets/figures/rendered/ab_rl.png" alt="SFT and RLVR ablation results">
+              <figcaption>
+                <strong>Training ablation.</strong>
+                SFT stabilizes the protocol, while RLVR improves numerical precision on top of supervised warmup.
+                <a href="assets/figures/ab_rl.pdf">Open PDF</a>
+              </figcaption>
+            </figure>
+            <figure class="paper-figure">
+              <img src="assets/figures/rendered/training_metrics.png" alt="GRPO reward and response length curves">
+              <figcaption>
+                <strong>Optimization dynamics.</strong>
+                Reward rises while response length remains bounded, indicating quality gains rather than verbosity-driven reward hacking.
+                <a href="assets/figures/training_metrics.pdf">Open PDF</a>
+              </figcaption>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="results">
+        <div class="container">
+          <div class="section-heading centered">
+            <p class="eyebrow">Experiments</p>
+            <h2>Consistent gains across heterogeneous forecasting domains.</h2>
+            <p class="lead">
+              CastFlow is evaluated on electricity markets, power-grid temperature, renewable energy generation, and streamflow. It is compared with statistical models, tree models, deep forecasters, foundation models, LLM forecasters, and agentic forecasting baselines.
+            </p>
+          </div>
+
+          <div class="coverage-grid" aria-label="Experiment coverage">
+            <article>
+              <span>Short horizon</span>
+              <strong>5 electricity-market datasets</strong>
+              <p>BE, DE, NP, FR, and PJM use a 168-hour lookback window and a 24-hour forecast horizon.</p>
+            </article>
+            <article>
+              <span>Long horizon</span>
+              <strong>5 cross-domain datasets</strong>
+              <p>ETTh, ETTm, WP, SP, and MOPEX use 96-step horizons across grid, renewable, and streamflow domains.</p>
+            </article>
+            <article>
+              <span>Comparison scope</span>
+              <strong>21 baselines</strong>
+              <p>The benchmark covers statistical, tree-based, deep, foundation, LLM-based, and agentic forecasting methods.</p>
+            </article>
+          </div>
+
+          <div class="result-showcase" aria-label="Main experimental results">
+            <div class="result-callout">
+              <span class="mini-label">Main result</span>
+              <strong>Best MSE and MAE on 9 of 10 datasets, including all 5 long-horizon benchmarks.</strong>
+              <p>PJM is the only exception on both metrics: Chronos gives the lowest MSE, while AlphaCast gives the lowest MAE. The homepage keeps this exception visible because the experimental claim should remain specific rather than over-aggregated.</p>
+              <div class="result-pills" aria-label="Benchmark scope">
+                <span>9/10 MSE wins</span>
+                <span>9/10 MAE wins</span>
+                <span>5/5 long-horizon wins</span>
+                <span>21 baselines</span>
+              </div>
+            </div>
+
+            <div class="result-chart" aria-label="Relative MSE change versus the strongest prior on each dataset">
+              <div class="chart-header">
+                <h3>Relative MSE change</h3>
+                <span>vs. strongest prior</span>
+              </div>
+              <div class="bar-row">
+                <span>BE</span>
+                <div class="bar-track"><i style="width: 39%"></i></div>
+                <strong>-9.9%</strong>
+              </div>
+              <div class="bar-row">
+                <span>DE</span>
+                <div class="bar-track"><i style="width: 16%"></i></div>
+                <strong>-4.0%</strong>
+              </div>
+              <div class="bar-row">
+                <span>NP</span>
+                <div class="bar-track"><i style="width: 4%"></i></div>
+                <strong>-1.0%</strong>
+              </div>
+              <div class="bar-row">
+                <span>FR</span>
+                <div class="bar-track"><i style="width: 44%"></i></div>
+                <strong>-11.2%</strong>
+              </div>
+              <div class="bar-row loss-row">
+                <span>PJM</span>
+                <div class="bar-track"><i style="width: 27%"></i></div>
+                <strong>+6.8%</strong>
+              </div>
+              <div class="bar-row">
+                <span>ETTh</span>
+                <div class="bar-track"><i style="width: 3%"></i></div>
+                <strong>-0.2%</strong>
+              </div>
+              <div class="bar-row">
+                <span>ETTm</span>
+                <div class="bar-track"><i style="width: 19%"></i></div>
+                <strong>-4.8%</strong>
+              </div>
+              <div class="bar-row">
+                <span>WP</span>
+                <div class="bar-track"><i style="width: 43%"></i></div>
+                <strong>-11.0%</strong>
+              </div>
+              <div class="bar-row">
+                <span>SP</span>
+                <div class="bar-track"><i style="width: 8%"></i></div>
+                <strong>-2.0%</strong>
+              </div>
+              <div class="bar-row">
+                <span>MOPEX</span>
+                <div class="bar-track"><i style="width: 100%"></i></div>
+                <strong>-25.5%</strong>
+              </div>
+              <p class="chart-note">Bar length is scaled to the largest absolute relative change in the table.</p>
+            </div>
+          </div>
+
+          <div class="baseline-panel">
+            <div>
+              <p class="eyebrow">Baseline suite</p>
+              <h3>Complete comparison families</h3>
+              <p>The main table is not a narrow comparison against a single model family. It spans classical forecasting, machine learning, deep neural forecasting, time-series foundation models, LLM-based forecasters, and agentic reasoning baselines.</p>
+            </div>
+            <ul class="baseline-list" aria-label="Baseline methods">
+              <li><strong>Statistical</strong><span>Prophet, ARIMA</span></li>
+              <li><strong>Tree models</strong><span>XGBoost, LightGBM</span></li>
+              <li><strong>Deep forecasters</strong><span>Autoformer, DLinear, PatchTST, iTransformer, TimeXer, ConvTimeNet</span></li>
+              <li><strong>Foundation models</strong><span>Chronos, TimesFM, Sundial</span></li>
+              <li><strong>LLM forecasters</strong><span>Time-LLM, PromptCast, TokenCast, S2IP-LLM</span></li>
+              <li><strong>Agentic and reasoning baselines</strong><span>TimeReasoner, Time-R1, TimeSeriesScientist, AlphaCast</span></li>
+            </ul>
+          </div>
+
+          <div class="table-scroll">
+            <table>
+              <caption>Main comparison against the strongest prior result on each dataset</caption>
+              <thead>
+                <tr>
+                  <th>Dataset</th>
+                  <th>Setting</th>
+                  <th>Best prior MSE</th>
+                  <th>CastFlow MSE</th>
+                  <th>MSE change</th>
+                  <th>Best prior MAE</th>
+                  <th>CastFlow MAE</th>
+                  <th>MAE change</th>
+                  <th>Outcome</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td>BE</td><td>Short</td><td>606.71, iTransformer</td><td><strong>546.87</strong></td><td class="gain">-9.9%</td><td>9.63, Chronos</td><td><strong>9.60</strong></td><td class="gain">-0.3%</td><td><span class="status-win">Best MSE/MAE</span></td></tr>
+                <tr><td>DE</td><td>Short</td><td>208.93, PatchTST</td><td><strong>200.47</strong></td><td class="gain">-4.0%</td><td>9.57, LightGBM</td><td><strong>9.50</strong></td><td class="gain">-0.7%</td><td><span class="status-win">Best MSE/MAE</span></td></tr>
+                <tr><td>NP</td><td>Short</td><td>24.16, AlphaCast</td><td><strong>23.92</strong></td><td class="gain">-1.0%</td><td>3.19, AlphaCast</td><td><strong>3.11</strong></td><td class="gain">-2.5%</td><td><span class="status-win">Best MSE/MAE</span></td></tr>
+                <tr><td>FR</td><td>Short</td><td>797.42, PatchTST</td><td><strong>707.96</strong></td><td class="gain">-11.2%</td><td>8.24, Chronos</td><td><strong>8.16</strong></td><td class="gain">-1.0%</td><td><span class="status-win">Best MSE/MAE</span></td></tr>
+                <tr><td>PJM</td><td>Short</td><td><strong>25.70, Chronos</strong></td><td>27.45</td><td class="loss">+6.8%</td><td><strong>3.59, AlphaCast</strong></td><td>3.74</td><td class="loss">+4.2%</td><td><span class="status-gap">Prior best</span></td></tr>
+                <tr><td>ETTh</td><td>Long</td><td>8.02, Time-R1</td><td><strong>8.00</strong></td><td class="gain">-0.2%</td><td>2.04, Time-R1</td><td><strong>2.03</strong></td><td class="gain">-0.5%</td><td><span class="status-win">Best MSE/MAE</span></td></tr>
+                <tr><td>ETTm</td><td>Long</td><td>2.48, AlphaCast</td><td><strong>2.36</strong></td><td class="gain">-4.8%</td><td>1.10, TokenCast</td><td><strong>1.04</strong></td><td class="gain">-5.5%</td><td><span class="status-win">Best MSE/MAE</span></td></tr>
+                <tr><td>WP</td><td>Long</td><td>1932.59, DLinear</td><td><strong>1719.99</strong></td><td class="gain">-11.0%</td><td>28.52, ConvTimeNet</td><td><strong>27.40</strong></td><td class="gain">-3.9%</td><td><span class="status-win">Best MSE/MAE</span></td></tr>
+                <tr><td>SP</td><td>Long</td><td>17.25, Time-LLM</td><td><strong>16.90</strong></td><td class="gain">-2.0%</td><td>2.67, iTransformer/Time-R1</td><td><strong>2.50</strong></td><td class="gain">-6.4%</td><td><span class="status-win">Best MSE/MAE</span></td></tr>
+                <tr><td>MOPEX</td><td>Long</td><td>4.83, TimeXer</td><td><strong>3.60</strong></td><td class="gain">-25.5%</td><td>1.28, TimeXer</td><td><strong>1.19</strong></td><td class="gain">-7.0%</td><td><span class="status-win">Best MSE/MAE</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <details class="benchmark-details">
+            <summary>Benchmark settings</summary>
+            <div class="table-scroll">
+              <table class="compact-table">
+                <thead>
+                  <tr>
+                    <th>Dataset</th>
+                    <th>Domain</th>
+                    <th>Frequency</th>
+                    <th>Dim</th>
+                    <th>L</th>
+                    <th>H</th>
+                    <th>Stride</th>
+                    <th>Features</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td>BE</td><td>Electricity Market</td><td>1h</td><td>4</td><td>168</td><td>24</td><td>48</td><td>Electricity price, generation forecast, system load forecast</td></tr>
+                  <tr><td>DE</td><td>Electricity Market</td><td>1h</td><td>4</td><td>168</td><td>24</td><td>48</td><td>Electricity price, wind power forecast, Amprion zonal load forecast</td></tr>
+                  <tr><td>NP</td><td>Electricity Market</td><td>1h</td><td>4</td><td>168</td><td>24</td><td>48</td><td>Electricity price, grid load forecast, wind power forecast</td></tr>
+                  <tr><td>FR</td><td>Electricity Market</td><td>1h</td><td>4</td><td>168</td><td>24</td><td>48</td><td>Electricity price, generation forecast, system load forecast</td></tr>
+                  <tr><td>PJM</td><td>Electricity Market</td><td>1h</td><td>4</td><td>168</td><td>24</td><td>48</td><td>Electricity price, system load forecast, zonal COMED load forecast</td></tr>
+                  <tr><td>ETTh</td><td>Power Grid</td><td>1h</td><td>8</td><td>96</td><td>96</td><td>48</td><td>Oil temperature and useful/useless load covariates</td></tr>
+                  <tr><td>ETTm</td><td>Power Grid</td><td>15min</td><td>8</td><td>96</td><td>96</td><td>96</td><td>Oil temperature and useful/useless load covariates</td></tr>
+                  <tr><td>WP</td><td>Renewable Energy Generation</td><td>15min</td><td>8</td><td>96</td><td>96</td><td>96</td><td>Real power, radiation, wind, temperature, humidity, precipitation</td></tr>
+                  <tr><td>SP</td><td>Renewable Energy Generation</td><td>15min</td><td>8</td><td>96</td><td>96</td><td>96</td><td>Real power, radiation, wind, temperature, humidity, precipitation</td></tr>
+                  <tr><td>MOPEX</td><td>Streamflow</td><td>1day</td><td>6</td><td>96</td><td>96</td><td>48</td><td>Streamflow discharge, precipitation, evaporation, max/min temperature</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <section class="section soft" id="analysis">
+        <div class="container">
+          <div class="section-heading centered">
+            <p class="eyebrow">Analysis</p>
+            <h2>Where do the gains come from?</h2>
+            <p class="lead">
+              The ablations test whether the workflow components are necessary, while the trajectory and case figures show how CastFlow changes the numerical forecast rather than only producing explanations.
+            </p>
+          </div>
+
+          <figure class="paper-figure">
+            <img src="assets/figures/rendered/improve_sample.png" alt="Forecast trajectories for ensemble baseline, training-free CastFlow, and fine-tuned CastFlow">
+            <figcaption>
+              <strong>Forecast trajectory dynamics.</strong>
+              The ensemble baseline captures coarse shape; training-free reasoning improves direction; fine-tuned CastFlow better matches peaks, phase, and local fluctuations.
+              <a href="assets/figures/improve_sample.pdf">Open PDF</a>
+            </figcaption>
+          </figure>
+
+          <div class="table-scroll">
+            <table>
+              <caption>Representative ablation evidence</caption>
+              <thead>
+                <tr>
+                  <th>Study</th>
+                  <th>Removed or varied</th>
+                  <th>What it shows</th>
+                  <th>Representative numbers</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Core workflow</td>
+                  <td>w/o Reflection</td>
+                  <td>Invalid length, response format, and evidence-alignment errors are no longer corrected.</td>
+                  <td>BE MSE 1027.76 vs 546.87; WP 5102.29 vs 1719.99.</td>
+                </tr>
+                <tr>
+                  <td>Core workflow</td>
+                  <td>w/o Toolkit</td>
+                  <td>The forecaster loses structured diagnostic evidence and relies mostly on parametric knowledge.</td>
+                  <td>ETTm MSE 17.68 vs 2.36; WP 3517.03 vs 1719.99.</td>
+                </tr>
+                <tr>
+                  <td>Toolkit</td>
+                  <td>w/o Anchorer</td>
+                  <td>The ensemble prior is the strongest single toolkit dependency.</td>
+                  <td>PJM MSE 47.89 vs 27.45; WP 2718.42 vs 1719.99.</td>
+                </tr>
+                <tr>
+                  <td>Reward</td>
+                  <td>Hybrid MSE</td>
+                  <td>Absolute accuracy and improvement over the baseline must be optimized together.</td>
+                  <td>Best MSE on BE, DE, SP, and ETTh among reward variants.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <figure class="paper-figure case-figure">
+            <img src="assets/figures/rendered/CastFlow_case.png" alt="Case study on the BE electricity market dataset">
+            <figcaption>
+              <strong>Case study.</strong>
+              On BE, memory and tool evidence support targeted correction: the workflow identifies lead-lag effects, boosts the midday peak, and repairs an early shift before returning the final forecast.
+              <a href="assets/figures/CastFlow_case.pdf">Open PDF</a>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section" id="code">
+        <div class="container">
+          <div class="section-heading centered">
+            <p class="eyebrow">Code</p>
+            <h2>Repository structure follows the paper workflow.</h2>
+            <p class="lead">
+              The public repository exposes the same sequence used in the paper: build reusable forecasting priors, distill workflow memory, train the local forecaster, then run and evaluate test-time forecasts.
+            </p>
+          </div>
+          <div class="repo-flow" aria-label="Repository workflow">
+            <article>
+              <span>01</span>
+              <h3>Anchorer Library</h3>
+              <p>Build the Foundational Anchorer case library so tool use can start from similar historical examples and ensemble priors.</p>
+            </article>
+            <article>
+              <span>02</span>
+              <h3>Strategy Memory</h3>
+              <p>Construct cross-domain strategy memory from successful planning and tool-use trajectories.</p>
+            </article>
+            <article>
+              <span>03</span>
+              <h3>SFT and RLVR Data</h3>
+              <p>Export workflow-oriented supervised data and reinforcement trajectories for the local forecasting model.</p>
+            </article>
+            <article>
+              <span>04</span>
+              <h3>Forecast and Evaluate</h3>
+              <p>Serve the trained model, forecast test windows, and evaluate predictions with the same metrics used in the paper.</p>
+            </article>
+          </div>
+          <div class="button-row centered-row">
+            <a class="button primary" href="https://github.com/Forever-Pan/CastFlow">
+              <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m8 9-3 3 3 3"></path>
+                <path d="m16 9 3 3-3 3"></path>
+                <path d="m14 5-4 14"></path>
+              </svg>
+              <span>Open GitHub</span>
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <section class="section soft" id="citation">
+        <div class="container narrow">
+          <div class="section-heading centered">
+            <p class="eyebrow">Citation</p>
+            <h2>BibTeX</h2>
+          </div>
+          <div class="citation-card">
+            <button class="copy-button" type="button" data-copy-bib>Copy</button>
+            <pre><code data-bibtex>@article{pan2026castflow,
+  title   = {CastFlow: Learning Role-Specialized Agentic Workflows for Time Series Forecasting},
+  author  = {Pan, Bokai and Cheng, Mingyue and Liu, Zhiding and Yu, Shuo and Tao, Xiaoyu and Wu, Yuchong and Liu, Qi and Lian, Defu and Chen, Enhong},
+  journal = {Submitted to IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  year    = {2026}
+}</code></pre>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container">
+        <p>CastFlow: Learning Role-Specialized Agentic Workflows for Time Series Forecasting.</p>
+        <div>
+          <a href="assets/paper/CastFlow_TPAMI.pdf">Paper</a>
+          <a href="https://github.com/Forever-Pan/CastFlow">GitHub</a>
+        </div>
+      </div>
+    </footer>
+
+    <script src="assets/script.js"></script>
+  </body>
+</html>

@@ -190,7 +190,7 @@ python -m scripts build-anchorer --max-windows 5
 
 </details>
 
-<details>
+<details open>
 <summary><strong>2. Build Cross-Domain Strategy Memory</strong></summary>
 
 `build-memory` automatically loops over all registered train splits and uses the matching `case_library/*/anchor_library.json`.
@@ -209,7 +209,7 @@ memory/cross_domain/memory.json
 
 </details>
 
-<details>
+<details open>
 <summary><strong>3. Export SFT Data From Memory</strong></summary>
 
 ```bash
@@ -220,7 +220,7 @@ python -m scripts export-memory-data \
 
 </details>
 
-<details>
+<details open>
 <summary><strong>4. Supervised Fine-Tuning</strong></summary>
 
 Paper-style target: Qwen3-4B, 1 epoch, learning rate `5e-5`, global batch size 8.
@@ -244,7 +244,7 @@ models/sft_cross_domain/
 
 </details>
 
-<details>
+<details open>
 <summary><strong>5. Prepare RL Data</strong></summary>
 
 ```bash
@@ -255,7 +255,7 @@ python -m scripts prepare-rl-data \
 
 </details>
 
-<details>
+<details open>
 <summary><strong>6. RL Training</strong></summary>
 
 ```bash
@@ -272,7 +272,7 @@ python -m scripts train-rlvr \
 
 </details>
 
-<details>
+<details open>
 <summary><strong>7. Serve The Local Forecasting Model</strong></summary>
 
 Start vLLM before forecasting. The served model name must match `LOCAL_MODEL_NAME` in `.env`.
@@ -290,7 +290,7 @@ vllm serve path/to/model \
 
 </details>
 
-<details>
+<details open>
 <summary><strong>8. Forecast A Test CSV</strong></summary>
 
 Forecasting requires an explicit test CSV via `--data`. For registered benchmark filenames such as `EPF_DE_test.csv` and `windy_power_test.csv`, CastFlow automatically infers the dataset defaults for lookback, horizon, seasonal period, and stride from the file path, so these arguments do not need to be passed manually.
@@ -307,7 +307,7 @@ python -m scripts forecast \
 
 </details>
 
-<details>
+<details open>
 <summary><strong>9. Evaluate Forecasts</strong></summary>
 
 DE example:
@@ -329,4 +329,14 @@ Outputs:
 
 ## Citation 📖
 
-If you use CastFlow, cite the corresponding CastFlow paper when it is released.
+If you find CastFlow useful in your research, please cite the paper and link to this repository. The manuscript is currently submitted to IEEE Transactions on Pattern Analysis and Machine Intelligence; the BibTeX entry below is a provisional citation and can be updated with the official publication metadata once available.
+
+```bibtex
+@misc{pan2026castflow,
+  title        = {CastFlow: Learning Role-Specialized Agentic Workflows for Time Series Forecasting},
+  author       = {Pan, Bokai and Cheng, Mingyue and Liu, Zhiding and Yu, Shuo and Tao, Xiaoyu and Wu, Yuchong and Liu, Qi and Lian, Defu and Chen, Enhong},
+  year         = {2026},
+  note         = {Manuscript submitted to IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  url          = {https://github.com/Forever-Pan/CastFlow}
+}
+```

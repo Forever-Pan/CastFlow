@@ -329,7 +329,7 @@ Outputs:
 
 ## Citation 📖
 
-If you find CastFlow useful in your research, please cite the paper and link to this repository. The manuscript is currently submitted to IEEE Transactions on Pattern Analysis and Machine Intelligence; the BibTeX entry below is a provisional citation and can be updated with the official publication metadata once available.
+If you find CastFlow useful in your research, please cite the paper and link to this repository. The manuscript has been submitted to IEEE Transactions on Pattern Analysis and Machine Intelligence; before the official publication metadata is available, please use the provisional BibTeX entry below. After publication, the journal, volume, issue, pages, and DOI fields can be updated accordingly.
 
 ```bibtex
 @misc{pan2026castflow,

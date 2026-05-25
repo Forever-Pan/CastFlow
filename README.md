@@ -2,7 +2,7 @@
   <img src="docs/assets/castflow-mark.svg" width="88" alt="CastFlow mark">
   <h1>CastFlow</h1>
   <p>CastFlow is a role-specialized agentic workflow for time series forecasting. It couples a frozen general-purpose reasoning model for planning and reflection with a trainable local forecasting model for evidence-guided numerical refinement.</p>
-  <p><a href="https://forever-pan.github.io/CastFlow/"><strong>Project page</strong></a></p>
+  <p><a href="https://forever-pan.github.io/CastFlow/"><kbd><strong>Project page</strong></kbd></a></p>
 </div>
 
 <p align="center">

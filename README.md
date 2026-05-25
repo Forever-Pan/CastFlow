@@ -13,7 +13,7 @@ The implementation in this directory follows the paper naming and workflow:
 
 **Project page**: https://forever-pan.github.io/CastFlow/
 
-![CastFlow overview](assets/figures/framework.pdf)
+![CastFlow overview](assets/figures/framework.png)
 
 ## Directory Layout
 

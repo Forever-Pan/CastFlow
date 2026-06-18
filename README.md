@@ -30,19 +30,17 @@ The implementation in this directory follows the paper naming and workflow:
 
 ```text
 CastFlow/
-  scripts/                          Python package
-    anchorer_runtime/               External time-series model runtime; weights are not bundled
-    training/                       SFT, RLVR, reward, and export utilities
-  data/
-    raw/
-      train/                        User-provided training CSVs
-      test/                         User-provided test CSVs
-    sft/                            Exported SFT CSVs
-    rl/                             Exported RLVR parquet files
-  case_library/                     Generated Foundational Anchorer case libraries
-  memory/                           Generated StrategyMemory files
-  models/                           SFT/RLVR outputs
-  predictions/                      Forecast and evaluation outputs
+  cli/                              CLI entry package (`python -m cli` / `castflow`)
+  scripts/                          Bash wrappers for the end-to-end workflow
+  utils/                            Runtime config, dataset registry/io, schema, and shared helpers
+  evaluation/                       Forecast parsing and metric evaluation
+  forecasting/                      Prompting, tool execution, and inference modules
+  workflow/                         End-to-end workflow orchestration and strategy memory
+  training/                         SFT, RLVR, reward, and export utilities
+  anchorer/                         Foundational Anchorer case-library construction
+  backends/                         External time-series model runtime
+  docs/                             Project page assets
+  assets/                           Repository figures
 ```
 
 ## Dataset Placement 📊
@@ -71,18 +69,18 @@ CSV files should contain one timestamp column named `date` or `time_stamp`. If n
 Place the trainable local model somewhere accessible, for example:
 
 ```text
-models/Qwen3-4B
+../models/Qwen3-4B
 ```
 
 The configuration uses **Qwen3-4B** as the local trainable forecasting backbone.
 
 ### Foundational Anchorer Runtime
 
-`scripts/anchorer_runtime` contains wrappers and local code for the anchorer model pool. Large model weights are not bundled. Put the required weights under the expected runtime subdirectories, for example:
+`backends/` contains wrappers and local code for the anchorer model pool. Put the required weights under the expected runtime subdirectories, for example:
 
 ```text
-scripts/anchorer_runtime/shared/foundation_models/
-scripts/anchorer_runtime/packages/
+backends/shared/foundation_models/
+backends/packages/
 ```
 
 The anchorer can then build per-domain `case_library/*/anchor_library.json` files. If a model weight is missing, the corresponding anchor model may fail or be skipped depending on the runtime wrapper.
@@ -99,15 +97,24 @@ conda activate <your-env-name>
 | Package | Version / use |
 | --- | --- |
 | Python | `>=3.10` |
-| PyTorch | `>=2.1` |
+| `numpy`, `pandas` | core data handling |
+| `openai` | Planning, Reflection, and OpenAI-compatible inference |
+| `tqdm` | progress display for long-running workflows |
+| `python-dateutil`, `holidays` | time-series calendar utilities |
+| `statsmodels`, `pyclustering` | Foundational Anchorer case-library build |
+| PyTorch | `>=2.1`, for SFT |
 | `transformers` | `>=4.43` |
 | `datasets` | `>=2.14` |
 | `peft` | `>=0.6` |
-| `pyarrow` | `>=12` |
-| `agentlightning` | for RLVR |
-| `vllm` | for local forecasting serving |
+| `accelerate`, `deepspeed` | distributed SFT |
+| `einops`, `safetensors` | deep learning / model loading |
+| `pyarrow` | `>=12`, RL parquet I/O |
+| `agentlightning` | RLVR |
+| `vllm` | local forecasting serving |
+| `chronos-forecasting`, `timesfm` (`<3.12`), `xgboost`, `lightgbm` | anchorer model pool |
+| `scipy`, `scikit-learn`, `prophet` | classical / statistical models |
 
-The package metadata in `pyproject.toml` already defines the core, training, and RLVR dependency groups.
+The package metadata in `pyproject.toml` already defines the core, anchorer, training, RLVR, and serving dependency groups.
 
 ## Installation ⚙️
 
@@ -120,13 +127,7 @@ pip install -r requirements.txt
 Install the package in editable mode:
 
 ```bash
-pip install -e ".[training,rlvr]"
-```
-
-Install the serving dependency separately if you want local vLLM forecasting:
-
-```bash
-pip install vllm
+pip install -e .
 ```
 
 Create `.env` in the repository root. The external API is used by Planning and Reflection. The local vLLM server is used only by the Forecasting module during test-time inference.
@@ -156,15 +157,29 @@ These defaults are now reflected in the CLI and training configs.
 | RLVR | GRPO, group size `G=8`, temperature `1.0`, learning rate `2e-6`, KL coefficient `0.0`, 3 epochs |
 | Forecast output length | max completion length 5000 in the paper; runtime default allows up to 7000 tokens for safety |
 
+## CLI Usage 🖥️
+
+Workflow commands are implemented in `cli/cli.py`. From the repository root:
+
+```bash
+python -m cli --help
+```
+
+After `pip install -e .`, the same interface is available as `castflow`.
+
+The numbered scripts in `scripts/` wrap these commands with the default cross-domain paths used below. Most scripts forward extra flags via `"$@"`; training and serving scripts also honor environment variables such as `BASE_MODEL_PATH`, `SFT_OUTPUT_DIR`, and `LOCAL_FORECAST_MODEL_PATH`.
+
 ## End-to-End Workflow 🚀
+
+Run the steps below from the repository root in order.
 
 <details open>
 <summary><strong>1. Build The Foundational Anchorer Case Libraries</strong></summary>
 
-This scans all registered train splits and writes one case library per domain.
+Scans all registered train splits and writes one case library per domain.
 
 ```bash
-python -m scripts build-anchorer
+bash scripts/01_build_anchorer.sh
 ```
 
 Outputs:
@@ -182,30 +197,20 @@ case_library/sunny_power/anchor_library.json
 case_library/mopex/anchor_library.json
 ```
 
-For a fast dry run:
-
-```bash
-python -m scripts build-anchorer --max-windows 5
-```
+For a quick dry run, append `--max-windows 5`.
 
 </details>
 
 <details open>
 <summary><strong>2. Build Cross-Domain Strategy Memory</strong></summary>
 
-`build-memory` automatically loops over all registered train splits and uses the matching `case_library/*/anchor_library.json`.
+Loops over all registered train splits and uses the matching `case_library/*/anchor_library.json`.
 
 ```bash
-python -m scripts build-memory \
-  --output memory/cross_domain/memory.json \
-  --verbose-samples
+bash scripts/02_build_memory.sh
 ```
 
-Output:
-
-```text
-memory/cross_domain/memory.json
-```
+Output: `memory/cross_domain/memory.json`
 
 </details>
 
@@ -213,10 +218,10 @@ memory/cross_domain/memory.json
 <summary><strong>3. Export SFT Data From Memory</strong></summary>
 
 ```bash
-python -m scripts export-memory-data \
-  --memory memory/cross_domain/memory.json \
-  --output data/sft/cross_domain_sft.csv
+bash scripts/03_export_sft.sh
 ```
+
+Output: `data/sft/cross_domain_sft.csv`
 
 </details>
 
@@ -226,21 +231,10 @@ python -m scripts export-memory-data \
 Paper-style target: Qwen3-4B, 1 epoch, learning rate `5e-5`, global batch size 8.
 
 ```bash
-torchrun --nproc_per_node=2 --master_port=32588 -m scripts train-sft \
-  --dataset-path data/sft/cross_domain_sft.csv \
-  --model-path /path/to/model \
-  --output-dir models/sft_cross_domain \
-  --batch-size 1 \
-  --gradient-accumulation 4 \
-  --learning-rate 5e-5 \
-  --num-epochs 1
+bash scripts/04_train_sft.sh
 ```
 
-Output:
-
-```text
-models/sft_cross_domain/
-```
+Defaults: base model `../models/Qwen3-4B`, output `models/sft_cross_domain`, `max-length 14000`. Override with `BASE_MODEL_PATH`, `SFT_OUTPUT_DIR`, `NPROC_PER_NODE`, or `MASTER_PORT`.
 
 </details>
 
@@ -248,10 +242,10 @@ models/sft_cross_domain/
 <summary><strong>5. Prepare RL Data</strong></summary>
 
 ```bash
-python -m scripts prepare-rl-data \
-  --input data/sft/cross_domain_sft.csv \
-  --output data/rl/cross_domain_rl.parquet
+bash scripts/05_prepare_rl.sh
 ```
+
+Output: `data/rl/cross_domain_rl.parquet`
 
 </details>
 
@@ -259,16 +253,10 @@ python -m scripts prepare-rl-data \
 <summary><strong>6. RL Training</strong></summary>
 
 ```bash
-python -m scripts train-rlvr \
-  --dataset-path data/rl/cross_domain_rl.parquet \
-  --model-path models/sft \
-  --output-dir models/rl \
-  --rollout-n 8 \
-  --temperature 1.0 \
-  --learning-rate 2e-6 \
-  --total-epochs 3 \
-  --n-gpus-per-node 2
+bash scripts/06_train_rlvr.sh
 ```
+
+Output: `models/rl_cross_domain/`
 
 </details>
 
@@ -278,32 +266,25 @@ python -m scripts train-rlvr \
 Start vLLM before forecasting. The served model name must match `LOCAL_MODEL_NAME` in `.env`.
 
 ```bash
-vllm serve path/to/model \
-  --host 0.0.0.0 \
-  --port 8002 \
-  --served-model-name castflow-forecast \
-  --api-key EMPTY \
-  --dtype bfloat16 \
-  --max-model-len 18000 \
-  --generation-config vllm
+bash scripts/07_serve_local_forecaster.sh
 ```
+
+By default this serves `models/sft_cross_domain` on port `8002`. Set `LOCAL_FORECAST_MODEL_PATH` to use an RL checkpoint instead.
 
 </details>
 
 <details open>
 <summary><strong>8. Forecast A Test CSV</strong></summary>
 
-Forecasting requires an explicit test CSV via `--data`. For registered benchmark filenames such as `EPF_DE_test.csv` and `windy_power_test.csv`, CastFlow automatically infers the dataset defaults for lookback, horizon, seasonal period, and stride from the file path, so these arguments do not need to be passed manually.
+Forecasting requires an explicit test CSV via `--data`. For registered benchmark filenames such as `EPF_DE_test.csv` and `windy_power_test.csv`, CastFlow automatically infers lookback, horizon, seasonal period, and stride from the file path.
 
 DE example:
 
 ```bash
-python -m scripts forecast \
-  --data data/raw/test/EPF_DE_test.csv \
-  --anchor-library case_library/EPF_DE/anchor_library.json \
-  --memory memory/cross_domain/memory.json \
-  --output predictions/de_forecast.csv
+bash scripts/08_forecast_de.sh
 ```
+
+Output: `predictions/de_forecast.csv`
 
 </details>
 
@@ -313,17 +294,10 @@ python -m scripts forecast \
 DE example:
 
 ```bash
-python -m scripts evaluate \
-  --csv-file predictions/de_forecast.csv \
-  --answer-col answer \
-  --ground-truth-col ground_truth \
-  --output predictions/de_metrics.csv
+bash scripts/09_evaluate_de.sh
 ```
 
-Outputs:
-
-- Console summary with aggregate MSE/MAE.
-- Optional row-level metric CSV at `predictions/de_metrics.csv`.
+Prints aggregate MSE/MAE and writes `predictions/de_metrics.csv`.
 
 </details>
 

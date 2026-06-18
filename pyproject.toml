@@ -10,26 +10,71 @@ requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.24",
   "pandas>=2.0",
+  "openai>=1.40.0",
+  "tqdm>=4.66.0",
+  "python-dateutil>=2.8",
+  "holidays>=0.33",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+anchorer = [
+  "scipy>=1.10.0",
+  "scikit-learn>=1.3.0",
+  "statsmodels>=0.14.0",
+  "pyclustering>=0.10.1",
+  "prophet>=1.1.5",
+  "chronos-forecasting>=0.0.1",
+  "timesfm>=1.0.0; python_version < \"3.12\"",
+  "xgboost>=2.0.0",
+  "lightgbm>=4.0.0",
+  "einops>=0.7.0",
+  "safetensors>=0.4.3",
+]
 training = [
   "torch>=2.1",
   "transformers>=4.43",
   "datasets>=2.14",
   "peft>=0.6",
   "pyarrow>=12",
+  "accelerate>=0.26.0",
+  "deepspeed>=0.14.0",
 ]
 rlvr = [
   "agentlightning",
   "pyarrow>=12",
 ]
+serving = [
+  "vllm",
+]
+dev = [
+  "pytest>=8.0",
+]
+all = [
+  "scipy>=1.10.0",
+  "scikit-learn>=1.3.0",
+  "statsmodels>=0.14.0",
+  "pyclustering>=0.10.1",
+  "prophet>=1.1.5",
+  "chronos-forecasting>=0.0.1",
+  "timesfm>=1.0.0; python_version < \"3.12\"",
+  "xgboost>=2.0.0",
+  "lightgbm>=4.0.0",
+  "einops>=0.7.0",
+  "safetensors>=0.4.3",
+  "torch>=2.1",
+  "transformers>=4.43",
+  "datasets>=2.14",
+  "peft>=0.6",
+  "pyarrow>=12",
+  "accelerate>=0.26.0",
+  "deepspeed>=0.14.0",
+  "agentlightning",
+  "vllm",
+]
 
 [project.scripts]
-castflow = "scripts.cli:main"
-scripts = "scripts.cli:main"
+castflow = "cli.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["scripts*"]
+include = ["cli*", "anchorer*", "evaluation*", "forecasting*", "backends*", "training*", "utils*", "workflow*"]

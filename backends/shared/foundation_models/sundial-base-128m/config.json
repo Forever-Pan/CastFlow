@@ -1,0 +1,30 @@
+{
+  "_name_or_path": "sundial_base_128m",
+  "architectures": [
+    "SundialForPrediction"
+  ],
+  "auto_map": {
+    "AutoConfig": "configuration_sundial.SundialConfig",
+    "AutoModelForCausalLM": "modeling_sundial.SundialForPrediction"
+  },
+  "diffusion_batch_mul": 4,
+  "dropout_rate": 0.1,
+  "flow_loss_depth": 3,
+  "hidden_act": "silu",
+  "hidden_size": 768,
+  "initializer_range": 0.02,
+  "input_token_len": 16,
+  "intermediate_size": 3072,
+  "max_position_embeddings": 10000,
+  "model_type": "sundial",
+  "num_attention_heads": 12,
+  "num_hidden_layers": 12,
+  "num_sampling_steps": 50,
+  "output_token_lens": [
+    720
+  ],
+  "rope_theta": 10000,
+  "torch_dtype": "float32",
+  "transformers_version": "4.40.1",
+  "use_cache": true
+}

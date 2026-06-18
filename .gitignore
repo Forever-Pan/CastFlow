@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+.DS_Store
+
+# User-provided datasets and training outputs
+data/
+case_library/
+memory/
+predictions/
+models/
+
+backends/packages/castmaster/
+backends/packages/castmaster_*/
+backends/shared/DeepLearningCheckpoints/
+backends/shared/foundation_models/**/*.ckpt
+backends/shared/foundation_models/**/*.safetensors
+backends/shared/foundation_models/**/*.bin
+backends/shared/foundation_models/**/*.pth
+backends/shared/foundation_models/**/*.pt

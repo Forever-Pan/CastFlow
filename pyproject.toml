@@ -32,7 +32,7 @@ anchorer = [
 ]
 training = [
   "torch>=2.1",
-  "transformers>=4.43",
+  "transformers>=4.51.0",
   "datasets>=2.14",
   "peft>=0.6",
   "pyarrow>=12",
@@ -62,7 +62,7 @@ all = [
   "einops>=0.7.0",
   "safetensors>=0.4.3",
   "torch>=2.1",
-  "transformers>=4.43",
+  "transformers>=4.51.0",
   "datasets>=2.14",
   "peft>=0.6",
   "pyarrow>=12",

@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "Please cite this research manuscript when using CastFlow."
+title: "CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting"
+type: software
+authors:
+  - family-names: Pan
+    given-names: Bokai
+  - family-names: Cheng
+    given-names: Mingyue
+  - family-names: Tao
+    given-names: Xiaoyu
+  - family-names: Liu
+    given-names: Zhiding
+  - family-names: Yu
+    given-names: Shuo
+  - family-names: Wu
+    given-names: Yuchong
+  - family-names: Liu
+    given-names: Qi
+  - family-names: Lian
+    given-names: Defu
+  - family-names: Chen
+    given-names: Enhong
+repository-code: "https://github.com/Forever-Pan/CastFlow"
+url: "https://forever-pan.github.io/CastFlow/"
+license: MIT

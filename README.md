@@ -1,6 +1,7 @@
 <div align="center">
   <img src="docs/assets/castflow-mark.svg" width="88" alt="CastFlow mark">
   <h1>CastFlow</h1>
+  <p><strong>Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting</strong></p>
   <p>CastFlow is a role-specialized agentic workflow for time series forecasting. It couples a frozen general-purpose reasoning model for planning and reflection with a trainable local forecasting model for evidence-guided numerical refinement.</p>
   <p><a href="https://forever-pan.github.io/CastFlow/"><kbd><strong>Project page</strong></kbd></a></p>
 </div>
@@ -15,7 +16,7 @@
 
 ## Workflow Overview 🔁
 
-The implementation in this directory follows the paper naming and workflow:
+The public implementation exposes the following forecasting roles. SFT and RLVR update only the forecasting model; planning and reflection remain frozen:
 
 | Component | Workflow |
 | --- | --- |
@@ -45,7 +46,9 @@ CastFlow/
 
 ## Dataset Placement 📊
 
-The default registered benchmark suite follows the setting: chronological 7:1:2 split, cross-domain joint training, and the following lookback/horizon/stride settings.
+Prepare the benchmark CSVs using the reported chronological 7:1:2 split before
+running the workflow. The registry reads these files and uses the following
+lookback/horizon/stride settings; it does not create the splits automatically.
 
 | Dataset | Train CSV | Test CSV | Lookback | Horizon | Stride |
 | --- | --- | --- | ---: | ---: | ---: |
@@ -54,11 +57,14 @@ The default registered benchmark suite follows the setting: chronological 7:1:2 
 | FR | `data/raw/train/EPF_FR_train_val.csv` | `data/raw/test/EPF_FR_test.csv` | 168 | 24 | 48 |
 | NP | `data/raw/train/EPF_NP_train_val.csv` | `data/raw/test/EPF_NP_test.csv` | 168 | 24 | 48 |
 | PJM | `data/raw/train/EPF_PJM_train_val.csv` | `data/raw/test/EPF_PJM_test.csv` | 168 | 24 | 48 |
-| ETTh1 | `data/raw/train/ETT_ETTh1_train_val.csv` | `data/raw/test/ETT_ETTh1_test.csv` | 96 | 96 | 48 |
-| ETTm1 | `data/raw/train/ETT_ETTm1_train_val.csv` | `data/raw/test/ETT_ETTm1_test.csv` | 96 | 96 | 96 |
+| ETTh | `data/raw/train/ETT_ETTh1_train_val.csv` | `data/raw/test/ETT_ETTh1_test.csv` | 96 | 96 | 48 |
+| ETTm | `data/raw/train/ETT_ETTm1_train_val.csv` | `data/raw/test/ETT_ETTm1_test.csv` | 96 | 96 | 96 |
 | WP | `data/raw/train/windy_power_train_val.csv` | `data/raw/test/windy_power_test.csv` | 96 | 96 | 96 |
 | SP | `data/raw/train/sunny_power_train_val.csv` | `data/raw/test/sunny_power_test.csv` | 96 | 96 | 96 |
 | MOPEX | `data/raw/train/mopex_train_val.csv` | `data/raw/test/mopex_test.csv` | 96 | 96 | 48 |
+
+ETTh and ETTm are the manuscript display names. The CLI and file registry use
+`ETTh1` and `ETTm1` as their corresponding identifiers.
 
 CSV files should contain one timestamp column named `date` or `time_stamp`. If no timestamp column exists, CastFlow uses the row index. The target column defaults to the last numeric non-timestamp column; use `--target-col` if you need to override it.
 
@@ -87,9 +93,12 @@ The anchorer can then build per-domain `case_library/*/anchor_library.json` file
 
 ## Environment 💻
 
+The workflow scripts target Linux with Python 3.10 or 3.11. Training and local
+model serving additionally require a compatible GPU/CUDA environment.
+
 ```bash
+git clone https://github.com/Forever-Pan/CastFlow.git
 cd CastFlow
-conda activate <your-env-name>
 ```
 
 ## Requirements 📦
@@ -103,7 +112,7 @@ conda activate <your-env-name>
 | `python-dateutil`, `holidays` | time-series calendar utilities |
 | `statsmodels`, `pyclustering` | Foundational Anchorer case-library build |
 | PyTorch | `>=2.1`, for SFT |
-| `transformers` | `>=4.43` |
+| `transformers` | `>=4.51.0`, required for Qwen3 support |
 | `datasets` | `>=2.14` |
 | `peft` | `>=0.6` |
 | `accelerate`, `deepspeed` | distributed SFT |
@@ -118,44 +127,50 @@ The package metadata in `pyproject.toml` already defines the core, anchorer, tra
 
 ## Installation ⚙️
 
-Install the full dependency set from the repository requirements file:
+Install the core package, then add the components needed for your run:
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -e .
+python -m cli --help
+# Optional expert-model pool:
+python -m pip install -e '.[anchorer]'
+# Optional training and RLVR:
+python -m pip install -e '.[training,rlvr]'
+# Use an environment with a compatible PyTorch/CUDA stack for serving:
+python -m pip install -e '.[serving]'
 ```
 
-Install the package in editable mode:
+`requirements.txt` lists the combined dependency set. The optional groups let
+you install only the components you need.
+
+Create a private configuration from the credential-free template:
 
 ```bash
-pip install -e .
+cp .env.example .env
 ```
 
-Create `.env` in the repository root. The external API is used by Planning and Reflection. The local vLLM server is used only by the Forecasting module during test-time inference.
-
-```env
-OPENAI_BASE_URL=http://localhost:8003/v1
-OPENAI_API_KEY=test-key
-MODEL=forecast
-
-LOCAL_MODEL_BASE_URL=http://localhost:8002/v1
-LOCAL_MODEL_NAME=castflow-forecast
-LOCAL_MODEL_API_KEY=EMPTY
-```
+Set the planning/reflection endpoint, credential, and model name in `.env`.
+The forecasting endpoint must point to your separately served trained model.
+The example sets a 5,000-token forecasting limit, matching the reported limit;
+the code default remains 7,000 unless overridden. See
+[runtime and reproducibility notes](docs/REPRODUCIBILITY.md) for configuration,
+required external assets, and the scope of this public implementation.
 
 ## Default Parameters 🎛️
 
-These defaults are now reflected in the CLI and training configs.
+The table below describes public-code defaults and example-script settings.
+They do not identify a particular historical experiment run.
 
 | Component | Setting |
 | --- | --- |
-| Frozen planner/reflection model | Grok 4 or any OpenAI-compatible strong reasoning API |
+| Frozen planner/reflection model | Configure the endpoint and model explicitly; the manuscript uses Grok 4 |
 | Local trainable forecaster | Qwen3-4B |
 | Memory construction | K-parallel exploration, `PARALLEL_PLAN_K=4` |
 | Memory retrieval | top-k memory retrieval, default `K=3`, threshold `0.90` |
 | Reflection retries | train `3`, test `10` |
 | SFT | cross-domain, 1 epoch, learning rate `5e-5`, global batch size 8 |
 | RLVR | GRPO, group size `G=8`, temperature `1.0`, learning rate `2e-6`, KL coefficient `0.0`, 3 epochs |
-| Forecast output length | max completion length 5000 in the paper; runtime default allows up to 7000 tokens for safety |
+| Forecast output length | 5,000 in `.env.example`; code default 7,000 |
 
 ## CLI Usage 🖥️
 
@@ -197,7 +212,8 @@ case_library/sunny_power/anchor_library.json
 case_library/mopex/anchor_library.json
 ```
 
-For a quick dry run, append `--max-windows 5`.
+For a small initial run, append `--max-windows 5`. This still executes the expert
+models and writes a case library.
 
 </details>
 
@@ -303,14 +319,18 @@ Prints aggregate MSE/MAE and writes `predictions/de_metrics.csv`.
 
 ## Citation 📖
 
-If you find CastFlow useful in your research, please cite the paper and link to this repository. The manuscript has been submitted to IEEE Transactions on Pattern Analysis and Machine Intelligence; before the official publication metadata is available, please use the provisional BibTeX entry below. After publication, the journal, volume, issue, pages, and DOI fields can be updated accordingly.
+This repository accompanies the research manuscript *CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting*.
+Use the provisional entry below until publication metadata is available.
+The [project page](https://forever-pan.github.io/CastFlow/) links to the current
+manuscript. Data, weights, and generated case/memory libraries are separate
+assets described in [the reproducibility notes](docs/REPRODUCIBILITY.md).
 
 ```bibtex
 @misc{pan2026castflow,
-  title        = {CastFlow: Learning Role-Specialized Agentic Workflows for Time Series Forecasting},
-  author       = {Pan, Bokai and Cheng, Mingyue and Liu, Zhiding and Yu, Shuo and Tao, Xiaoyu and Wu, Yuchong and Liu, Qi and Lian, Defu and Chen, Enhong},
+  title        = {CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting},
+  author       = {Pan, Bokai and Cheng, Mingyue and Tao, Xiaoyu and Liu, Zhiding and Yu, Shuo and Wu, Yuchong and Liu, Qi and Lian, Defu and Chen, Enhong},
   year         = {2026},
-  note         = {Manuscript submitted to IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  note         = {Research manuscript},
   url          = {https://github.com/Forever-Pan/CastFlow}
 }
 ```

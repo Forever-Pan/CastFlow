@@ -96,7 +96,18 @@ def load_castflow_env() -> dict[str, str]:
                 continue
             key, value = stripped.split("=", 1)
             values[key.strip()] = unquote_env_value(value.strip())
-    values.update({key: value for key, value in os.environ.items() if key.startswith(("OPENAI_", "MODEL", "LOCAL_MODEL_", "CASTFLOW_", "USE_API"))})
+    legacy_keys = {
+        "MAX_REFLECTION_LOOPS",
+        "MAX_TEST_RETRY_LOOPS",
+        "PARALLEL_PLAN_K",
+        "EXCELLENT_MSE_THRESHOLD",
+        "EXCELLENT_MAE_THRESHOLD",
+    }
+    values.update({
+        key: value
+        for key, value in os.environ.items()
+        if key in legacy_keys or key.startswith(("OPENAI_", "MODEL", "LOCAL_MODEL_", "CASTFLOW_", "USE_API"))
+    })
     return values
 
 

@@ -2,6 +2,12 @@ __pycache__/
 *.py[cod]
 *.pyo
 .env
+.env.*
+!.env.example
+.venv/
+*.egg-info/
+build/
+dist/
 .DS_Store
 
 # User-provided datasets and training outputs

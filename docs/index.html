@@ -4,14 +4,99 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting</title>
-    <meta name="description" content="CastFlow is a role-specialized agentic workflow for time series forecasting, combining memory, a multi-view toolkit, ensemble anchoring, and workflow-oriented SFT plus RLVR training.">
-    <meta property="og:title" content="CastFlow">
-    <meta property="og:description" content="Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting.">
+    <meta name="description" content="CastFlow bridges experience-guided tool reasoning and specialized numerical forecasting with a frozen planner, a multi-view toolkit, and SFT plus RLVR.">
+    <meta property="og:title" content="CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting">
+    <meta property="og:description" content="CastFlow bridges experience-guided tool reasoning and specialized numerical forecasting with a frozen planner, a multi-view toolkit, and SFT plus RLVR.">
     <meta property="og:type" content="website">
+    <link rel="canonical" href="https://forever-pan.github.io/CastFlow/">
+    <meta property="og:url" content="https://forever-pan.github.io/CastFlow/">
+    <meta property="og:image" content="https://forever-pan.github.io/CastFlow/assets/figures/rendered/framework.png">
+    <meta property="og:image:alt" content="CastFlow framework: experience-guided evidence acquisition and specialized forecast refinement">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting">
+    <meta name="twitter:description" content="CastFlow bridges experience-guided tool reasoning and specialized numerical forecasting with a frozen planner, a multi-view toolkit, and SFT plus RLVR.">
+    <meta name="twitter:image" content="https://forever-pan.github.io/CastFlow/assets/figures/rendered/framework.png">
+    <meta name="citation_title" content="CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting">
+    <meta name="citation_author" content="Bokai Pan">
+    <meta name="citation_author" content="Mingyue Cheng">
+    <meta name="citation_author" content="Xiaoyu Tao">
+    <meta name="citation_author" content="Zhiding Liu">
+    <meta name="citation_author" content="Shuo Yu">
+    <meta name="citation_author" content="Yuchong Wu">
+    <meta name="citation_author" content="Qi Liu">
+    <meta name="citation_author" content="Defu Lian">
+    <meta name="citation_author" content="Enhong Chen">
+    <meta name="citation_arxiv_id" content="2604.27840">
+    <meta name="citation_pdf_url" content="https://forever-pan.github.io/CastFlow/assets/paper/CastFlow.pdf">
+    <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "ScholarlyArticle",
+  "name": "CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting",
+  "url": "https://forever-pan.github.io/CastFlow/",
+  "sameAs": "https://arxiv.org/abs/2604.27840",
+  "identifier": "https://doi.org/10.48550/arXiv.2604.27840",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "Bokai Pan",
+      "sameAs": "https://orcid.org/0009-0001-4496-8166"
+    },
+    {
+      "@type": "Person",
+      "name": "Mingyue Cheng",
+      "sameAs": "https://orcid.org/0000-0001-9873-7681"
+    },
+    {
+      "@type": "Person",
+      "name": "Xiaoyu Tao",
+      "sameAs": "https://orcid.org/0009-0000-0634-6254"
+    },
+    {
+      "@type": "Person",
+      "name": "Zhiding Liu",
+      "sameAs": "https://orcid.org/0000-0003-0994-473X"
+    },
+    {
+      "@type": "Person",
+      "name": "Shuo Yu",
+      "sameAs": "https://orcid.org/0009-0006-1060-5451"
+    },
+    {
+      "@type": "Person",
+      "name": "Yuchong Wu",
+      "sameAs": "https://orcid.org/0009-0001-4389-9613"
+    },
+    {
+      "@type": "Person",
+      "name": "Qi Liu",
+      "sameAs": "https://orcid.org/0000-0001-6956-5550"
+    },
+    {
+      "@type": "Person",
+      "name": "Defu Lian",
+      "sameAs": "https://orcid.org/0000-0002-3507-9607"
+    },
+    {
+      "@type": "Person",
+      "name": "Enhong Chen",
+      "sameAs": "https://orcid.org/0000-0002-4835-4102"
+    }
+  ],
+  "description": "CastFlow bridges experience-guided tool reasoning and specialized numerical forecasting with a frozen planner, a multi-view toolkit, and SFT plus RLVR.",
+  "inLanguage": "en",
+  "encoding": {
+    "@type": "MediaObject",
+    "contentUrl": "https://forever-pan.github.io/CastFlow/assets/paper/CastFlow.pdf",
+    "encodingFormat": "application/pdf"
+  }
+}
+    </script>
     <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="assets/styles.css">
   </head>
   <body>
+    <a class="skip-link" href="#top">Skip to content</a>
     <header class="site-header" data-elevate>
       <a class="brand" href="#top" aria-label="CastFlow home">
         <img src="assets/castflow-mark.svg" alt="" aria-hidden="true">
@@ -23,19 +108,24 @@
         <a href="#training">Training</a>
         <a href="#results">Results</a>
         <a href="#analysis">Analysis</a>
+        <a href="#execution">Execution</a>
+        <a href="#code">Code</a>
         <a href="#citation">BibTeX</a>
       </nav>
     </header>
 
-    <main id="top">
+    <main id="top" tabindex="-1">
       <section class="hero">
         <div class="container">
           <p class="eyebrow">Research manuscript</p>
           <h1>CastFlow</h1>
           <p class="subtitle">Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting</p>
-          <p class="authors">Bokai Pan, Mingyue Cheng, Xiaoyu Tao, Zhiding Liu, Shuo Yu, Yuchong Wu, Qi Liu, Defu Lian, Enhong Chen</p>
+          <p class="authors"><a href="https://orcid.org/0009-0001-4496-8166">Bokai Pan</a>, <a href="https://orcid.org/0000-0001-9873-7681">Mingyue Cheng</a>, <a href="https://orcid.org/0009-0000-0634-6254">Xiaoyu Tao</a>, <a href="https://orcid.org/0000-0003-0994-473X">Zhiding Liu</a>, <a href="https://orcid.org/0009-0006-1060-5451">Shuo Yu</a>, <a href="https://orcid.org/0009-0001-4389-9613">Yuchong Wu</a>, <a href="https://orcid.org/0000-0001-6956-5550">Qi Liu</a>, <a href="https://orcid.org/0000-0002-3507-9607">Defu Lian</a>, <a href="https://orcid.org/0000-0002-4835-4102">Enhong Chen</a></p>
           <p class="affiliation">State Key Laboratory of Cognitive Intelligence, University of Science and Technology of China</p>
           <div class="button-row" aria-label="Project links">
+            <a class="button" href="https://arxiv.org/abs/2604.27840">
+              <span aria-hidden="true">↗</span><span>arXiv</span>
+            </a>
             <a class="button primary" href="assets/paper/CastFlow.pdf">
               <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M6 3h8l4 4v14H6z"></path>
@@ -43,7 +133,7 @@
                 <path d="M9 13h6"></path>
                 <path d="M9 17h4"></path>
               </svg>
-              <span>Paper</span>
+              <span>Paper PDF</span>
             </a>
             <a class="button" href="https://github.com/Forever-Pan/CastFlow">
               <svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -69,10 +159,10 @@
       <section class="teaser" aria-label="System overview">
         <div class="wide-container">
           <figure class="paper-figure main-figure">
-            <img src="assets/figures/rendered/framework.png" alt="CastFlow framework overview" loading="eager">
+            <img src="assets/figures/rendered/framework.webp" alt="CastFlow framework overview" loading="eager" width="2938" height="1383" decoding="async" fetchpriority="high">
             <figcaption>
               <strong>CastFlow system overview.</strong>
-              A frozen reasoning LLM plans tool use and checks final responses; memory retrieves prior successful trajectories; a leakage-aware toolkit builds multi-view evidence and an ensemble baseline; a fine-tuned local LLM performs evidence-conditioned numerical correction.
+              Training-built Experience Memory guides a frozen LLM in planning tool use and checking responses. A multi-view toolkit constructs diagnostic evidence and an ensemble prior, which a specialized forecasting LLM uses to generate refined numerical forecasts. SFT and RLVR update only the forecasting LLM.
               <a href="assets/figures/framework.pdf">Open PDF</a>
             </figcaption>
           </figure>
@@ -87,7 +177,7 @@
           </div>
           <div class="summary-item">
             <strong>11</strong>
-            <span>diagnostic tools</span>
+            <span>tools in four families</span>
           </div>
           <div class="summary-item">
             <strong>10</strong>
@@ -108,18 +198,10 @@
         <div class="container narrow">
           <div class="section-heading centered">
             <p class="eyebrow">Abstract</p>
-            <h2>Forecasting as evidence-guided correction.</h2>
+            <h2>Bridging evidence acquisition and prediction.</h2>
           </div>
           <div class="prose">
-            <p>
-              LLM-based forecasting is often formulated as direct sequence generation: the model receives a historical window and produces future values in a single pass. This formulation makes it difficult to acquire contextual evidence across multiple rounds, inspect intermediate reasoning, combine reliable ensemble priors, or repair invalid forecasts after generation.
-            </p>
-            <p>
-              CastFlow reframes the task as a role-specialized agentic workflow. Planning selects the evidence needed for the current window; Action invokes deterministic diagnostic tools; Forecasting uses a fine-tuned Qwen3-4B local model to revise an ensemble baseline; Reflection verifies format, horizon length, and evidence consistency before returning the final forecast.
-            </p>
-            <p>
-              The key separation is functional rather than cosmetic: a frozen general LLM handles broad reasoning and verification, while the trainable local model focuses on the narrower numerical task of baseline correction. Workflow-oriented SFT and GRPO-based RLVR further teach the forecaster to use retrieved experience, tool evidence, and measurable reward signals.
-            </p>
+            <p>Time series forecasting is a fundamental task in temporal data analytics, and large language model (LLM)-based agents offer a promising paradigm through autonomous tool interaction and evidence-grounded reasoning. However, two fundamental challenges remain: how to acquire forecast-relevant evidence through adaptive tool interactions, and how to translate such evidence into accurate numerical predictions. To address these challenges, we propose CastFlow, a role-specialized agentic forecasting framework that bridges general-purpose tool reasoning and specialized temporal forecasting. Specifically, CastFlow introduces an Experience Memory that distills successful tool-use trajectories from training data, guiding a frozen LLM to orchestrate a multi-view toolkit for evidence acquisition. A lightweight specialized LLM then performs evidence-grounded temporal reasoning to refine an ensemble forecasting prior. To enhance this capability, we develop a two-stage training strategy combining supervised fine-tuning and reinforcement learning with verifiable rewards, where final forecasting outcomes of the overall workflow guide the optimization of the specialized model. Extensive experiments on ten real-world benchmarks demonstrate that CastFlow outperforms competitive baselines on nine datasets. Our findings highlight the importance of bridging autonomous evidence acquisition and specialized temporal reasoning for accurate and adaptive agentic forecasting. The source code is available at <a href="https://github.com/Forever-Pan/CastFlow">https://github.com/Forever-Pan/CastFlow</a>.</p>
           </div>
         </div>
       </section>
@@ -144,10 +226,10 @@
             </p>
           </div>
           <figure class="paper-figure">
-            <img src="assets/figures/rendered/motivation.png" alt="Comparison of training-free, fine-tuning, and agentic workflow methods">
+            <img src="assets/figures/rendered/motivation.webp" alt="Two challenges addressed by experience-guided tool reasoning and specialized forecast refinement" loading="lazy" width="2180" height="1084" decoding="async">
             <figcaption>
               <strong>Motivation.</strong>
-              CastFlow turns forecasting from one-shot generation into a memory- and tool-supported reasoning loop.
+              Experience-guided tool reasoning addresses evidence acquisition; the specialized forecaster translates that evidence and an ensemble prior into numerical predictions.
               <a href="assets/figures/motivation.pdf">Open PDF</a>
             </figcaption>
           </figure>
@@ -198,7 +280,7 @@
             </article>
             <article>
               <h3>Multi-view toolkit</h3>
-              <p>The toolkit covers ensemble anchoring, statistical and spectral profiling, dynamic pattern monitoring, and residual diagnosis. These tools provide evidence without leaking unavailable future values.</p>
+              <p>The toolkit covers ensemble anchoring, statistical and spectral profiling, dynamic pattern monitoring, and training-side residual diagnosis. Test-time tools use information available at the forecast origin, including previously issued auxiliary forecasts where applicable.</p>
             </article>
           </div>
 
@@ -270,15 +352,15 @@
 
           <div class="figure-pair">
             <figure class="paper-figure">
-              <img src="assets/figures/rendered/ab_rl.png" alt="SFT and RLVR ablation results">
+              <img src="assets/figures/rendered/ab_rl.webp" alt="SFT and RLVR ablation results" loading="lazy" width="2124" height="785" decoding="async">
               <figcaption>
                 <strong>Training ablation.</strong>
-                SFT stabilizes the protocol, while RLVR improves numerical precision on top of supervised warmup.
+                The full model has lower MSE than configurations without SFT or RLVR on every reported dataset. MAE has dataset-dependent exceptions; the frozen planner and reflection model are unchanged.
                 <a href="assets/figures/ab_rl.pdf">Open PDF</a>
               </figcaption>
             </figure>
             <figure class="paper-figure">
-              <img src="assets/figures/rendered/training_metrics.png" alt="GRPO reward and response length curves">
+              <img src="assets/figures/rendered/training_metrics.webp" alt="GRPO reward and response length curves" loading="lazy" width="2044" height="748" decoding="async">
               <figcaption>
                 <strong>Optimization dynamics.</strong>
                 Training reward rises while average response length later fluctuates within a bounded range. These statistics describe optimization behavior; they do not directly measure reasoning quality or total computational cost.
@@ -293,7 +375,7 @@
         <div class="container">
           <div class="section-heading centered">
             <p class="eyebrow">Experiments</p>
-            <h2>Consistent gains across heterogeneous forecasting domains.</h2>
+            <h2>Forecasting results across ten benchmarks.</h2>
             <p class="lead">
               CastFlow is evaluated on electricity markets, power-grid temperature, renewable energy generation, and streamflow. It is compared with statistical models, tree models, deep forecasters, foundation models, LLM forecasters, and agentic forecasting baselines.
             </p>
@@ -321,7 +403,7 @@
             <div class="result-callout">
               <span class="mini-label">Main result</span>
               <strong>Best MSE and MAE on 9 of 10 datasets, including all 5 long-horizon benchmarks.</strong>
-              <p>PJM is the only exception on both metrics: Chronos gives the lowest MSE, while AlphaCast gives the lowest MAE. The comparison reports results separately for each dataset.</p>
+              <p>PJM is the only exception on both metrics: Chronos gives the lowest MSE, while AlphaCast gives the lowest MAE. MSE and MAE are compared separately against the best competing value for each dataset.</p>
               <div class="result-pills" aria-label="Benchmark scope">
                 <span>9/10 MSE wins</span>
                 <span>9/10 MAE wins</span>
@@ -337,55 +419,55 @@
               </div>
               <div class="bar-row">
                 <span>BE</span>
-                <div class="bar-track"><i style="width: 39%"></i></div>
+                <div class="bar-track"><i style="width: 38.730%"></i></div>
                 <strong>-9.9%</strong>
               </div>
               <div class="bar-row">
                 <span>DE</span>
-                <div class="bar-track"><i style="width: 16%"></i></div>
+                <div class="bar-track"><i style="width: 15.901%"></i></div>
                 <strong>-4.0%</strong>
               </div>
               <div class="bar-row">
                 <span>NP</span>
-                <div class="bar-track"><i style="width: 4%"></i></div>
+                <div class="bar-track"><i style="width: 3.901%"></i></div>
                 <strong>-1.0%</strong>
               </div>
               <div class="bar-row">
                 <span>FR</span>
-                <div class="bar-track"><i style="width: 44%"></i></div>
+                <div class="bar-track"><i style="width: 44.054%"></i></div>
                 <strong>-11.2%</strong>
               </div>
               <div class="bar-row loss-row">
                 <span>PJM</span>
-                <div class="bar-track"><i style="width: 27%"></i></div>
+                <div class="bar-track"><i style="width: 26.739%"></i></div>
                 <strong>+6.8%</strong>
               </div>
               <div class="bar-row">
                 <span>ETTh</span>
-                <div class="bar-track"><i style="width: 3%"></i></div>
+                <div class="bar-track"><i style="width: 0.979%"></i></div>
                 <strong>-0.2%</strong>
               </div>
               <div class="bar-row">
                 <span>ETTm</span>
-                <div class="bar-track"><i style="width: 19%"></i></div>
+                <div class="bar-track"><i style="width: 19.001%"></i></div>
                 <strong>-4.8%</strong>
               </div>
               <div class="bar-row">
                 <span>WP</span>
-                <div class="bar-track"><i style="width: 43%"></i></div>
+                <div class="bar-track"><i style="width: 43.198%"></i></div>
                 <strong>-11.0%</strong>
               </div>
               <div class="bar-row">
                 <span>SP</span>
-                <div class="bar-track"><i style="width: 8%"></i></div>
+                <div class="bar-track"><i style="width: 7.967%"></i></div>
                 <strong>-2.0%</strong>
               </div>
               <div class="bar-row">
                 <span>MOPEX</span>
-                <div class="bar-track"><i style="width: 100%"></i></div>
+                <div class="bar-track"><i style="width: 100.000%"></i></div>
                 <strong>-25.5%</strong>
               </div>
-              <p class="chart-note">Bar length is scaled to the largest absolute relative change in the table.</p>
+              <p class="chart-note">Change = 100 × (CastFlow − best competing baseline) / baseline. Negative values indicate lower error. Bar lengths share a common scale.</p>
             </div>
           </div>
 
@@ -436,6 +518,8 @@
             </table>
           </div>
 
+          <p class="comparison-note">Values are point estimates from the reported benchmark. Small differences do not establish statistical significance.</p>
+
           <details class="benchmark-details">
             <summary>Benchmark settings</summary>
             <div class="table-scroll">
@@ -481,7 +565,7 @@
           </div>
 
           <figure class="paper-figure">
-            <img src="assets/figures/rendered/improve_sample.png" alt="Forecast trajectories for ensemble baseline, training-free CastFlow, and fine-tuned CastFlow">
+            <img src="assets/figures/rendered/improve_sample.webp" alt="Forecast trajectories for ensemble baseline, training-free CastFlow, and fine-tuned CastFlow" loading="lazy" width="2149" height="295" decoding="async">
             <figcaption>
               <strong>Forecast trajectory dynamics.</strong>
               The four windows compare the ensemble prior, training-free CastFlow, and the trained forecaster. They illustrate changes in peak magnitude and local alignment, alongside remaining errors.
@@ -516,7 +600,7 @@
                 <tr>
                   <td>Toolkit</td>
                   <td>w/o Anchorer</td>
-                  <td>Removing the anchorer yields the largest toolkit-ablation error increases on most reported datasets.</td>
+                  <td>Removing the anchorer yields the largest MSE increase among toolkit-category removals on every reported dataset.</td>
                   <td>PJM MSE 47.89 vs 27.45; WP 2718.42 vs 1719.99.</td>
                 </tr>
                 <tr>
@@ -530,13 +614,40 @@
           </div>
 
           <figure class="paper-figure case-figure">
-            <img src="assets/figures/rendered/CastFlow_case.png" alt="Case study on the BE electricity market dataset">
+            <img src="assets/figures/rendered/CastFlow_case.webp" alt="Case study on the BE electricity market dataset" loading="lazy" width="2880" height="1110" decoding="async">
             <figcaption>
               <strong>Case study.</strong>
               The BE example shows retrieved experience, a tool schedule, and a forecasting response that describes peak and timing adjustments. It illustrates the intended workflow for a selected forecast.
               <a href="assets/figures/CastFlow_case.pdf">Open PDF</a>
             </figcaption>
           </figure>
+        </div>
+      </section>
+
+      <section class="section" id="execution">
+        <div class="container">
+          <div class="section-heading centered">
+            <p class="eyebrow">Workflow execution</p>
+            <h2>Reuse diagnostics. Resume committed forecasts.</h2>
+            <p class="lead">Separate execution studies examine repeated diagnostic computation and recovery after a controlled interruption.</p>
+          </div>
+          <div class="execution-grid">
+            <article>
+              <span class="mini-label">Diagnostic feature reuse</span>
+              <h3>2.24–2.98× under full-tool plans</h3>
+              <p>Current-plan reuse preserves identical diagnostic outputs across six datasets. Speedups are 1.11–1.45× under fresh planning; measurements cover diagnostic computation.</p>
+            </article>
+            <article>
+              <span class="mini-label">Controlled interruption recovery</span>
+              <h3>1.98× median paired speedup</h3>
+              <p>For 35 pairs reaching the post-forecast interruption point, resuming committed stages preserves final predictions and reduces forecast calls from 70 to 35. Normal execution times remain similar.</p>
+            </article>
+          </div>
+          <figure class="paper-figure execution-figure">
+            <img src="assets/figures/rendered/system_features.webp" alt="Diagnostic runtime and speedups for fresh planning and full-tool plans across BE, DE, ETTh, ETTm, WP, and SP" loading="lazy" width="1480" height="476" decoding="async">
+            <figcaption><strong>Diagnostic feature reuse.</strong> Independent computation, all-primitive reuse, and current-plan reuse produce identical diagnostic outputs. <a href="assets/figures/system_features.pdf">Open PDF</a></figcaption>
+          </figure>
+          <p class="execution-note">The recovery study uses fixed full-tool plans, deterministic validation, and dataset-specific SFT-plus-RLVR checkpoints. These execution measurements use a separate experiment implementation; see the paper and <a href="https://github.com/Forever-Pan/CastFlow/blob/main/docs/REPRODUCIBILITY.md">runtime notes</a> for their scope.</p>
         </div>
       </section>
 
@@ -590,16 +701,22 @@
             <p class="eyebrow">Citation</p>
             <h2>BibTeX</h2>
           </div>
+          <p class="citation-intro">Please cite the CastFlow preprint. The arXiv identifier remains the same across versions.</p>
+          <div class="citation-actions"><a href="assets/citation.bib" download="CastFlow.bib">Download .bib</a><a href="https://doi.org/10.48550/arXiv.2604.27840">arXiv DOI ↗</a></div>
           <div class="citation-card">
-            <button class="copy-button" type="button" data-copy-bib>Copy</button>
+            <button class="copy-button" type="button" data-copy-bib>Copy BibTeX</button>
             <pre><code data-bibtex>@misc{pan2026castflow,
-  title   = {CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting},
-  author  = {Pan, Bokai and Cheng, Mingyue and Tao, Xiaoyu and Liu, Zhiding and Yu, Shuo and Wu, Yuchong and Liu, Qi and Lian, Defu and Chen, Enhong},
-  note    = {Research manuscript},
-  url     = {https://github.com/Forever-Pan/CastFlow},
-  year    = {2026}
+  title         = {CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting},
+  author        = {Pan, Bokai and Cheng, Mingyue and Tao, Xiaoyu and Liu, Zhiding and Yu, Shuo and Wu, Yuchong and Liu, Qi and Lian, Defu and Chen, Enhong},
+  year          = {2026},
+  eprint        = {2604.27840},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  doi           = {10.48550/arXiv.2604.27840},
+  url           = {https://arxiv.org/abs/2604.27840}
 }</code></pre>
           </div>
+          <p class="copy-status" role="status" aria-live="polite" data-copy-status></p>
         </div>
       </section>
     </main>
@@ -608,12 +725,18 @@
       <div class="container">
         <p>CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting.</p>
         <div>
-          <a href="assets/paper/CastFlow.pdf">Paper</a>
+          <a href="assets/paper/CastFlow.pdf">Paper PDF</a>
+          <a href="https://arxiv.org/abs/2604.27840">arXiv</a>
+          <a href="mailto:mycheng@ustc.edu.cn">Contact</a>
           <a href="https://github.com/Forever-Pan/CastFlow">GitHub</a>
         </div>
       </div>
     </footer>
 
-    <script src="assets/script.js"></script>
+    <dialog class="figure-dialog" aria-labelledby="figure-dialog-title" data-figure-dialog>
+      <div class="figure-dialog-toolbar"><h2 id="figure-dialog-title">Figure preview</h2><button type="button" data-close-figure aria-label="Close figure preview">Close ×</button></div>
+      <div class="figure-dialog-content"><img data-figure-preview alt=""></div>
+    </dialog>
+    <script src="assets/script.js" defer></script>
   </body>
 </html>

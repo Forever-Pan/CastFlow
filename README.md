@@ -3,7 +3,12 @@
   <h1>CastFlow</h1>
   <p><strong>Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting</strong></p>
   <p>CastFlow is a role-specialized agentic workflow for time series forecasting. It couples a frozen general-purpose reasoning model for planning and reflection with a trainable local forecasting model for evidence-guided numerical refinement.</p>
-  <p><a href="https://forever-pan.github.io/CastFlow/"><kbd><strong>Project page</strong></kbd></a></p>
+  <p>
+    <a href="https://arxiv.org/abs/2604.27840"><kbd><strong>arXiv</strong></kbd></a> &nbsp;
+    <a href="https://forever-pan.github.io/CastFlow/assets/paper/CastFlow.pdf"><kbd><strong>Paper PDF</strong></kbd></a> &nbsp;
+    <a href="https://forever-pan.github.io/CastFlow/"><kbd><strong>Project page</strong></kbd></a> &nbsp;
+    <a href="#citation"><kbd><strong>Citation</strong></kbd></a>
+  </p>
 </div>
 
 <p align="center">
@@ -13,6 +18,30 @@
 </p>
 
 ---
+
+## Start here
+
+CastFlow pairs experience-guided evidence acquisition with a specialized numerical
+forecaster. The paper reports the lowest MSE and MAE on 9 of 10 benchmarks among
+21 competing methods. See the [results and comparison table](https://forever-pan.github.io/CastFlow/#results).
+
+- **Read:** [paper PDF](https://forever-pan.github.io/CastFlow/assets/paper/CastFlow.pdf), [arXiv](https://arxiv.org/abs/2604.27840), and [project page](https://forever-pan.github.io/CastFlow/).
+- **Set up:** [installation](#installation), [dataset placement](#dataset-placement), and [weight placement](#weight-placement).
+- **Run:** [end-to-end workflow](#end-to-end-workflow) and [runtime configuration](docs/REPRODUCIBILITY.md).
+- **Cite:** use the [BibTeX entry](#citation) or GitHub's **Cite this repository** panel.
+
+### Quick environment check
+
+```bash
+git clone https://github.com/Forever-Pan/CastFlow.git
+cd CastFlow
+python -m pip install -e .
+python -m cli --help
+```
+
+This installs the core CLI. To run forecasting, continue with the optional
+dependencies, input data, expert and forecasting weights, and two model endpoints
+described below.
 
 ## Workflow Overview 🔁
 
@@ -44,6 +73,8 @@ CastFlow/
   assets/                           Repository figures
 ```
 
+<a id="dataset-placement"></a>
+
 ## Dataset Placement 📊
 
 Prepare the benchmark CSVs using the reported chronological 7:1:2 split before
@@ -67,6 +98,8 @@ ETTh and ETTm are the manuscript display names. The CLI and file registry use
 `ETTh1` and `ETTm1` as their corresponding identifiers.
 
 CSV files should contain one timestamp column named `date` or `time_stamp`. If no timestamp column exists, CastFlow uses the row index. The target column defaults to the last numeric non-timestamp column; use `--target-col` if you need to override it.
+
+<a id="weight-placement"></a>
 
 ## Weight Placement 🧠
 
@@ -124,6 +157,8 @@ cd CastFlow
 | `scipy`, `scikit-learn`, `prophet` | classical / statistical models |
 
 The package metadata in `pyproject.toml` already defines the core, anchorer, training, RLVR, and serving dependency groups.
+
+<a id="installation"></a>
 
 ## Installation ⚙️
 
@@ -183,6 +218,8 @@ python -m cli --help
 After `pip install -e .`, the same interface is available as `castflow`.
 
 The numbered scripts in `scripts/` wrap these commands with the default cross-domain paths used below. Most scripts forward extra flags via `"$@"`; training and serving scripts also honor environment variables such as `BASE_MODEL_PATH`, `SFT_OUTPUT_DIR`, and `LOCAL_FORECAST_MODEL_PATH`.
+
+<a id="end-to-end-workflow"></a>
 
 ## End-to-End Workflow 🚀
 
@@ -317,20 +354,27 @@ Prints aggregate MSE/MAE and writes `predictions/de_metrics.csv`.
 
 </details>
 
+<a id="citation"></a>
+
 ## Citation 📖
 
-This repository accompanies the research manuscript *CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting*.
-Use the provisional entry below until publication metadata is available.
-The [project page](https://forever-pan.github.io/CastFlow/) links to the current
-manuscript. Data, weights, and generated case/memory libraries are separate
-assets described in [the reproducibility notes](docs/REPRODUCIBILITY.md).
+If you use CastFlow in your research, please cite the paper below.
+The [project page](https://forever-pan.github.io/CastFlow/) provides the current
+manuscript and figures. The [arXiv record](https://arxiv.org/abs/2604.27840)
+preserves the preprint's version history.
 
 ```bibtex
 @misc{pan2026castflow,
-  title        = {CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting},
-  author       = {Pan, Bokai and Cheng, Mingyue and Tao, Xiaoyu and Liu, Zhiding and Yu, Shuo and Wu, Yuchong and Liu, Qi and Lian, Defu and Chen, Enhong},
-  year         = {2026},
-  note         = {Research manuscript},
-  url          = {https://github.com/Forever-Pan/CastFlow}
+  title         = {CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting},
+  author        = {Pan, Bokai and Cheng, Mingyue and Tao, Xiaoyu and Liu, Zhiding and Yu, Shuo and Wu, Yuchong and Liu, Qi and Lian, Defu and Chen, Enhong},
+  year          = {2026},
+  eprint        = {2604.27840},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  doi           = {10.48550/arXiv.2604.27840},
+  url           = {https://arxiv.org/abs/2604.27840}
 }
 ```
+
+[Download BibTeX](docs/assets/citation.bib). Data, weights, and generated
+case/memory libraries are described in [the runtime notes](docs/REPRODUCIBILITY.md).

@@ -1,26 +1,70 @@
 cff-version: 1.2.0
-message: "Please cite this research manuscript when using CastFlow."
-title: "CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting"
+message: If you use CastFlow, please cite the paper below.
+title: 'CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting'
 type: software
 authors:
+- family-names: Pan
+  given-names: Bokai
+  orcid: https://orcid.org/0009-0001-4496-8166
+- family-names: Cheng
+  given-names: Mingyue
+  orcid: https://orcid.org/0000-0001-9873-7681
+- family-names: Tao
+  given-names: Xiaoyu
+  orcid: https://orcid.org/0009-0000-0634-6254
+- family-names: Liu
+  given-names: Zhiding
+  orcid: https://orcid.org/0000-0003-0994-473X
+- family-names: Yu
+  given-names: Shuo
+  orcid: https://orcid.org/0009-0006-1060-5451
+- family-names: Wu
+  given-names: Yuchong
+  orcid: https://orcid.org/0009-0001-4389-9613
+- family-names: Liu
+  given-names: Qi
+  orcid: https://orcid.org/0000-0001-6956-5550
+- family-names: Lian
+  given-names: Defu
+  orcid: https://orcid.org/0000-0002-3507-9607
+- family-names: Chen
+  given-names: Enhong
+  orcid: https://orcid.org/0000-0002-4835-4102
+repository-code: https://github.com/Forever-Pan/CastFlow
+url: https://forever-pan.github.io/CastFlow/
+license: MIT
+preferred-citation:
+  type: article
+  title: 'CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting'
+  authors:
   - family-names: Pan
     given-names: Bokai
+    orcid: https://orcid.org/0009-0001-4496-8166
   - family-names: Cheng
     given-names: Mingyue
+    orcid: https://orcid.org/0000-0001-9873-7681
   - family-names: Tao
     given-names: Xiaoyu
+    orcid: https://orcid.org/0009-0000-0634-6254
   - family-names: Liu
     given-names: Zhiding
+    orcid: https://orcid.org/0000-0003-0994-473X
   - family-names: Yu
     given-names: Shuo
+    orcid: https://orcid.org/0009-0006-1060-5451
   - family-names: Wu
     given-names: Yuchong
+    orcid: https://orcid.org/0009-0001-4389-9613
   - family-names: Liu
     given-names: Qi
+    orcid: https://orcid.org/0000-0001-6956-5550
   - family-names: Lian
     given-names: Defu
+    orcid: https://orcid.org/0000-0002-3507-9607
   - family-names: Chen
     given-names: Enhong
-repository-code: "https://github.com/Forever-Pan/CastFlow"
-url: "https://forever-pan.github.io/CastFlow/"
-license: MIT
+    orcid: https://orcid.org/0000-0002-4835-4102
+  year: 2026
+  journal: arXiv preprint arXiv:2604.27840
+  doi: 10.48550/arXiv.2604.27840
+  url: https://arxiv.org/abs/2604.27840

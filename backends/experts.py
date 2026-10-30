@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
+from collections import OrderedDict
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from threading import RLock
@@ -30,6 +35,8 @@ _KINDS = {
     "xgboost",
     "lightgbm",
     "chronos",
+    "chronos_bolt",
+    "dlinear",
     "python",
 }
 _PARAMETERS = {
@@ -56,8 +63,54 @@ _PARAMETERS = {
         "seed",
     },
     "chronos": {"num_samples", "temperature", "top_k", "top_p", "seed"},
+    "chronos_bolt": set(),
+    "dlinear": set(),
 }
 _CHRONOS_LOCK = RLock()
+
+
+@dataclass
+class _ArimaOrderCache:
+    maximum: int
+    records: OrderedDict = field(default_factory=OrderedDict)
+    hits: int = 0
+    fits: int = 0
+
+
+_ARIMA_ORDER_CACHE: ContextVar[_ArimaOrderCache | None] = ContextVar(
+    "arima_order_cache", default=None
+)
+
+
+@contextmanager
+def arima_order_cache(max_entries: int = 8192):
+    """Reuse identical order fits only within an explicit offline preparation scope."""
+    if (
+        isinstance(max_entries, bool)
+        or not isinstance(max_entries, int)
+        or not 1 <= max_entries <= 65536
+    ):
+        raise ValueError("ARIMA cache size must be an integer between one and 65536")
+    active = _ARIMA_ORDER_CACHE.get()
+    if active is not None:
+        yield active
+        return
+    cache = _ArimaOrderCache(max_entries)
+    token = _ARIMA_ORDER_CACHE.set(cache)
+    try:
+        yield cache
+    finally:
+        _ARIMA_ORDER_CACHE.reset(token)
+        cache.records.clear()
+
+
+def _remember_arima(cache: _ArimaOrderCache | None, key: tuple, value: Any) -> None:
+    if cache is None:
+        return
+    cache.records[key] = value
+    cache.records.move_to_end(key)
+    while len(cache.records) > cache.maximum:
+        cache.records.popitem(last=False)
 
 
 def load_expert_manifest(path: str | Path | None) -> list[dict[str, Any]]:
@@ -92,11 +145,17 @@ def validate_expert_specs(specs: object) -> list[dict[str, Any]]:
             if unknown:
                 raise ValueError(f"unknown parameters for {name!r}: {sorted(unknown)}")
             _validate_parameters(kind, params)
-        if kind == "chronos" and (
+        if kind in {"chronos", "chronos_bolt", "dlinear"} and (
             not isinstance(spec.get("model_path"), str)
             or not spec["model_path"].strip()
         ):
-            raise ValueError("Chronos requires an explicit prepared local model_path")
+            raise ValueError(f"{kind} requires an explicit prepared local model_path")
+        if kind in {"chronos", "chronos_bolt", "dlinear"}:
+            spec["device"] = validate_device(spec.get("device", "cpu"))
+        if kind in {"chronos_bolt", "dlinear"} and not re.fullmatch(
+            r"[0-9a-f]{64}", str(spec.get("model_identity", ""))
+        ):
+            raise ValueError(f"{kind} requires its prepared model identity")
         if kind == "python":
             entrypoint = spec.get("entrypoint")
             if not isinstance(entrypoint, str) or len(entrypoint.split(":")) != 2:
@@ -108,6 +167,12 @@ def validate_expert_specs(specs: object) -> list[dict[str, Any]]:
         seen.add(name)
         result.append(spec)
     return result
+
+
+def validate_device(device: str) -> str:
+    if not isinstance(device, str) or not re.fullmatch(r"cpu|cuda(?::\d+)?", device):
+        raise ValueError("expert device must be cpu, cuda, or cuda:<index>")
+    return "cuda:0" if device == "cuda" else device
 
 
 def forecast_expert_specs(
@@ -198,8 +263,12 @@ def forecast_expert(
         return np.asarray(fitted.forecast(horizon), dtype=float)
     if kind in {"ridge", "xgboost", "lightgbm"}:
         return _autoregressive_forecast(kind, history, horizon, params)
-    if kind == "chronos":
+    if kind in {"chronos", "chronos_bolt"}:
         return _chronos_forecast(spec, history, horizon)
+    if kind == "dlinear":
+        from backends.neural import dlinear_forecast
+
+        return dlinear_forecast(spec, history, horizon, timestamps=timestamps)
     if kind == "python":
         # The manifest is a trusted runtime configuration, not an uploaded data file.
         module_name, attribute = spec["entrypoint"].split(":", 1)
@@ -233,30 +302,62 @@ def auto_arima_forecast(
     """Select a small nonseasonal ARIMA candidate set by AIC on the lookback."""
     from statsmodels.tsa.arima.model import ARIMA
 
+    history = np.ascontiguousarray(
+        finite_vector(history, "ARIMA history"), dtype=np.float64
+    )
+    if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon < 1:
+        raise ValueError("ARIMA horizon must be a positive integer")
     if np.ptp(history) == 0:
         return np.full(horizon, history[-1], dtype=float)
     best = None
     best_aic = float("inf")
+    cache = _ARIMA_ORDER_CACHE.get()
+    context = (len(history), history.tobytes(), horizon)
     for p in range(max_p + 1):
         for d in d_values:
             for q in range(max_q + 1):
                 if len(history) <= p + d + q + 3:
                     continue
+                key = (*context, p, d, q)
                 try:
+                    if cache is not None and key in cache.records:
+                        cache.hits += 1
+                        cached = cache.records[key]
+                        cache.records.move_to_end(key)
+                        if cached is None:
+                            continue
+                        score, pred = cached
+                        if score >= best_aic:
+                            continue
+                        if pred is not None:
+                            best, best_aic = pred.copy(), score
+                            continue
+                    if cache is not None:
+                        cache.fits += 1
                     candidate = ARIMA(history, order=(p, d, q)).fit()
                     if not candidate.mle_retvals.get("converged", True):
+                        _remember_arima(cache, key, None)
                         continue
                     score = float(candidate.aic)
-                    if np.isfinite(score) and score < best_aic:
+                    if not np.isfinite(score):
+                        _remember_arima(cache, key, None)
+                        continue
+                    if score < best_aic:
                         pred = np.asarray(candidate.forecast(horizon), dtype=float)
                         if pred.shape == (horizon,) and np.isfinite(pred).all():
-                            best, best_aic = pred, score
+                            _remember_arima(cache, key, (score, pred.copy()))
+                            best, best_aic = pred.copy(), score
+                        else:
+                            _remember_arima(cache, key, None)
+                    else:
+                        _remember_arima(cache, key, (score, None))
                 except (
                     ValueError,
                     FloatingPointError,
                     OverflowError,
                     np.linalg.LinAlgError,
                 ):
+                    _remember_arima(cache, key, None)
                     continue
     if best is None:
         raise ValueError("no finite ARIMA candidate could be fitted to the lookback")
@@ -369,18 +470,71 @@ def _autoregressive_forecast(
 
 
 @lru_cache(maxsize=2)
-def _load_chronos(model_path: str, identity: str):
+def _load_chronos(
+    model_path: str, identity: str, kind: str = "chronos", device: str = "cpu"
+):
     import torch
-    from chronos import ChronosPipeline
+    from chronos import BaseChronosPipeline, ChronosPipeline
     from backends.catalog import chronos_assets, content_fingerprint
 
-    if identity and content_fingerprint(chronos_assets(Path(model_path))) != identity:
+    if device.startswith("cuda") and (
+        not torch.cuda.is_available()
+        or int(device.split(":")[1]) >= torch.cuda.device_count()
+    ):
+        raise ValueError("requested Chronos CUDA device is unavailable")
+    if (
+        identity
+        and content_fingerprint(chronos_assets(Path(model_path), expected_kind=kind))
+        != identity
+    ):
         raise ValueError(
             "Chronos weight files differ from the prepared expert identity"
         )
-    return ChronosPipeline.from_pretrained(
-        model_path, device_map="cpu", torch_dtype=torch.float32, local_files_only=True
+    pipeline = BaseChronosPipeline if kind == "chronos_bolt" else ChronosPipeline
+    loaded = pipeline.from_pretrained(
+        model_path, device_map=device, torch_dtype=torch.float32, local_files_only=True
     )
+    model = loaded.model.model if kind == "chronos" else loaded.model
+    _validate_loaded_chronos_weights(Path(model_path), model)
+    return loaded
+
+
+def _validate_loaded_chronos_weights(path: Path, model: Any) -> None:
+    """Reject incomplete checkpoints instead of accepting randomly initialized keys."""
+    shapes: dict[str, tuple[int, ...]] = {}
+    safe_files = sorted(path.glob("*.safetensors"))
+    if safe_files:
+        from safetensors import safe_open
+
+        for file in safe_files:
+            with safe_open(file, framework="pt", device="cpu") as state:
+                for key in state.keys():
+                    if key in shapes:
+                        raise ValueError(
+                            "Chronos checkpoint contains duplicate parameter keys"
+                        )
+                    shapes[key] = tuple(state.get_slice(key).get_shape())
+    else:
+        import torch
+
+        for file in sorted(path.glob("pytorch_model*.bin")):
+            state = torch.load(file, map_location="cpu", weights_only=True)
+            if not isinstance(state, dict):
+                raise ValueError("Chronos weight file must contain a parameter mapping")
+            for key, tensor in state.items():
+                if key in shapes or not hasattr(tensor, "shape"):
+                    raise ValueError(
+                        "Chronos checkpoint has malformed or duplicate parameters"
+                    )
+                shapes[key] = tuple(tensor.shape)
+    expected = model.state_dict()
+    if set(shapes).difference(expected):
+        raise ValueError("Chronos checkpoint contains unexpected architecture keys")
+    for name, parameter in model.named_parameters():
+        if name not in shapes or shapes[name] != tuple(parameter.shape):
+            raise ValueError(
+                f"Chronos checkpoint is missing a complete matching parameter: {name}"
+            )
 
 
 def _chronos_forecast(
@@ -394,10 +548,32 @@ def _chronos_forecast(
             f"Chronos weights are not prepared at {path}; run initialize first"
         )
     params = spec.get("params", {})
+    device = validate_device(spec.get("device", "cpu"))
+    kind = spec["kind"]
     # Sampling state and the CPU pipeline are shared only under this lock.
-    with _CHRONOS_LOCK, torch.random.fork_rng(devices=[]):
-        torch.manual_seed(params.get("seed", 0))
-        pipeline = _load_chronos(str(path), str(spec.get("model_identity", "")))
+    cuda_devices = [int(device.split(":")[1])] if device.startswith("cuda") else []
+    with _CHRONOS_LOCK, torch.random.fork_rng(devices=cuda_devices):
+        torch.random.default_generator.manual_seed(params.get("seed", 0))
+        if cuda_devices:
+            torch.cuda.default_generators[cuda_devices[0]].manual_seed(
+                params.get("seed", 0)
+            )
+        pipeline = _load_chronos(
+            str(path), str(spec.get("model_identity", "")), kind, device
+        )
+        if kind == "chronos_bolt":
+            quantiles, _ = pipeline.predict_quantiles(
+                torch.as_tensor(history, dtype=torch.float32),
+                prediction_length=horizon,
+                quantile_levels=[0.5],
+                limit_prediction_length=False,
+            )
+            values = quantiles.detach().cpu().numpy()
+            if values.shape != (1, horizon, 1) or not np.isfinite(values).all():
+                raise ValueError(
+                    "Chronos-Bolt returned an invalid median forecast tensor"
+                )
+            return values[0, :, 0].astype(float)
         samples = pipeline.predict(
             torch.as_tensor(history, dtype=torch.float32),
             prediction_length=horizon,

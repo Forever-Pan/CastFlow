@@ -9,10 +9,38 @@ import numpy as np
 
 
 def representative_origins(
-    start: int, stop: int, horizon: int, stride: int, limit: int
+    start: int,
+    stop: int,
+    horizon: int,
+    stride: int,
+    limit: int,
+    *,
+    grid_origin: int | None = None,
 ) -> list[int]:
     """Choose spread-out origins whose complete target intervals stay in one split."""
-    origins = list(range(start, stop - horizon + 1, max(stride, horizon)))
+    for name, value, minimum in (
+        ("start", start, 0),
+        ("stop", stop, 0),
+        ("horizon", horizon, 1),
+        ("stride", stride, 1),
+        ("limit", limit, 1),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ValueError(f"{name} must be an integer >= {minimum}")
+    if grid_origin is not None and (
+        isinstance(grid_origin, bool)
+        or not isinstance(grid_origin, int)
+        or grid_origin < 0
+    ):
+        raise ValueError("grid_origin must be a nonnegative integer or None")
+    # Nonoverlapping scoring windows remain a subset of the original stride grid.
+    step = stride * ((horizon + stride - 1) // stride)
+    first = (
+        start
+        if grid_origin is None
+        else grid_origin + max(0, (start - grid_origin + step - 1) // step) * step
+    )
+    origins = list(range(first, stop - horizon + 1, step))
     if len(origins) <= limit:
         return origins
     indices = np.rint(np.linspace(0, len(origins) - 1, limit)).astype(int)
@@ -28,12 +56,16 @@ def summarize_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "windows": len(records),
         "valid_windows": len(valid),
         "failed_windows": len(records) - len(valid),
-        "mse": math.fsum(record["mse"] / len(records) for record in valid)
-        if complete
-        else None,
-        "mae": math.fsum(record["mae"] / len(records) for record in valid)
-        if complete
-        else None,
+        "mse": (
+            math.fsum(record["mse"] / len(records) for record in valid)
+            if complete
+            else None
+        ),
+        "mae": (
+            math.fsum(record["mae"] / len(records) for record in valid)
+            if complete
+            else None
+        ),
     }
 
 

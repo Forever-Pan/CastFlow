@@ -30,6 +30,16 @@ foundation = [
   "transformers>=4.51.0,<5",
   "chronos-forecasting>=2.0,<3",
   "huggingface-hub>=0.23",
+  "safetensors>=0.4.3",
+]
+casebank = [
+  "statsmodels>=0.14.0",
+  "dtaidistance>=2.3",
+  "torch>=2.1",
+  "transformers>=4.51.0,<5",
+  "chronos-forecasting>=2.0,<3",
+  "huggingface-hub>=0.23",
+  "safetensors>=0.4.3",
 ]
 anchorer = [
   "scipy>=1.10.0",

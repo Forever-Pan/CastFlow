@@ -174,6 +174,8 @@ python -m pip install -e .
 python -m cli --help
 # Native experts and one-command initialization:
 python -m pip install -e '.[initialization]'
+# Balanced statistical, neural, and foundation case-bank pool:
+python -m pip install -e '.[casebank]'
 # Optional expert-model pool:
 python -m pip install -e '.[anchorer]'
 # Optional training and RLVR:
@@ -235,24 +237,43 @@ After placing training CSVs and configuring the frozen teacher endpoint in
 `.env`, build the expert libraries and cross-domain experience memory together:
 
 ```bash
-bash scripts/00_initialize.sh --datasets BE,ETTh,WP
+python -m pip install -e '.[casebank]'
+bash scripts/00_initialize.sh --datasets BE,ETTh,WP --expert-preset balanced --promotion-policy conservative --download-models
 ```
 
 This command checks every input before preparation, prepares the selected
-experts, attempts up to 24 distinct parameter candidates per expert, freezes
-their parameters, constructs the anchor libraries, and checks each frozen prior
-on a reserved chronological confirmation interval before exploring teacher
-trajectories. Parameter search and confirmation use separate parts of the
-training-side tail. The saved library excludes confirmation targets.
-The default quality gate requires at least four complete confirmation windows,
-at least 1% lower MSE than the fixed seasonal baseline, no MSE regression against
+experts, attempts up to 64 distinct parameter candidates per tunable expert,
+retains the valid original recipe plus up to three prediction-distinct tuned
+variants per family, constructs the anchor libraries, and checks each frozen
+prior on a reserved chronological confirmation interval before exploring teacher
+trajectories. The balanced preset combines SeasonalNaive, HistoricAverage,
+AutoARIMA, Theta, Ridge, fresh prefix-trained DLinear variants, and frozen Chronos-Bolt Base.
+Omit the preset for the original four native experts, or choose `--models`.
+Model fitting, recipe selection, historical-loss calibration, and confirmation
+use separate chronological intervals. Case caps sample across eligible history.
+Stored cases and experience trajectories exclude the final training-side targets.
+Calibrated historical validation losses enter `softmax(-L)`; one variant per
+family is active in each cluster, so adding copies cannot increase its weight.
+The default quality gate requires at least four complete calibration and four
+complete confirmation windows, at least 1% lower MSE than the fixed seasonal
+baseline (subject to the documented zero-error numerical tolerance), no MSE regression against
 the untuned incumbent selected before confirmation, and no MAE regression against
 either reference. An unsuccessful gate stops the full initialization before
 teacher calls. `--quality-policy report` explicitly prepares a diagnostic bundle
 whose qualification status remains visible.
+By default, `--promotion-policy none` evaluates the exact frozen prepared prior.
+The recommended `conservative` option first freezes the prepared ensemble, the
+default model chosen on calibration data, and the original selection incumbent.
+It selects a qualified global policy using the same strict criteria on the
+training-side tail. That tail participates in policy selection, so its report
+explicitly does not claim independent test performance. A separate test split
+must remain outside initialization. No qualified policy means no promotion.
 The teacher endpoint is used for trajectory generation; a trained local 4B
 checkpoint is prepared and served separately in the training steps below.
-The command prints the resulting library and memory paths. By default, runtime
+Training memory uses the prepared prior; inference uses the selected policy.
+Both paths and their roles are returned. A promoted policy requires dated
+inputs and rejects requests before the last target used to select it.
+The command prints concise library, memory, and diagnostic paths. By default, runtime
 files are written under `../castflow_runtime/initialization` and reusable model
 assets under `../castflow_runtime/models`, outside the source checkout.
 
@@ -261,6 +282,8 @@ assets under `../castflow_runtime/models`, outside the source checkout.
 python -m cli initialize --list-models
 # Select experts and increase the distinct-candidate budget:
 bash scripts/00_initialize.sh --datasets BE --models SeasonalNaive,HistoricAverage,Ridge --tuning-rounds 64
+# Use local balanced assets on an explicitly selected GPU:
+bash scripts/00_initialize.sh --datasets BE,WP --expert-preset balanced --promotion-policy conservative --model-device cuda:0 --anchors-only
 # Prepare expert cases without teacher calls:
 bash scripts/00_initialize.sh --datasets BE --anchors-only
 # Custom input with explicit dimensions:
@@ -270,6 +293,13 @@ bash scripts/00_initialize.sh --data /path/train.csv --name custom --target-col 
 The same command resumes compatible completed stages and validates their hashes.
 Searches report attempted, successful, and failed recipes, plus finite-space
 exhaustion. A model with no tunable parameters is not counted as repeated trials.
+The default stage boundaries are 60% for the fresh neural fit cutoff, 75% for
+recipe selection, 82.5% for loss calibration, and 90% for confirmation. Each
+scoring stage uses up to 24 complete, non-overlapping target windows on the
+dataset's original stride grid. DLinear
+case targets start after its fit cutoff. Frozen medoids precede selection;
+later references do not change their geometry or calibrated weights. These are
+initialization settings, rather than a claim to reconstruct historical runs.
 Changed data, models, parameters, or source create a distinct initialization
 identity. Use `--output-root` and `--model-store` to choose storage locations.
 Pretrained expert weights are loaded locally; `--download-models` explicitly

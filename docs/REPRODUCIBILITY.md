@@ -18,30 +18,62 @@ the input schema differs from the defaults.
 ## Initialize cases and experience memory
 
 ```bash
-python -m pip install -e '.[initialization]'
+python -m pip install -e '.[casebank]'
 cp .env.example .env
 # Fill in the frozen teacher endpoint, model, and credential, then:
-python -m cli initialize --datasets BE,ETTh,WP
+python -m cli initialize --datasets BE,ETTh,WP --expert-preset balanced --promotion-policy conservative --download-models
 ```
 
 The initializer checks all selected training inputs before model preparation.
-It prepares named experts and defaults to 24 distinct parameter candidates per
+It prepares named experts and defaults to 64 distinct parameter candidates per
 expert, with a maximum budget of 256. Candidate 1 preserves the untuned recipe;
 subsequent candidates are reproducible and prefix-stable as the budget grows.
 Finite parameter spaces report exhaustion; failed fits remain recorded and are
 ineligible instead of aborting all remaining candidates or disappearing from
 their score. A candidate must succeed on every preselected selection window.
 
-The final 20% of the supplied training CSV is divided chronologically into
-selection and confirmation intervals. Their complete target windows do not
-overlap. Predictors receive lookbacks only. `--tuning-windows 12` and
-`--confirmation-windows 12` choose representative origins without inspecting
-target values. Parameters and the untuned incumbent are selected using only the
-earlier interval. The saved library ends before the confirmation targets, and
-that exact frozen library is evaluated on the later interval.
+The default training-prefix cutoff is 60%. Geometry cases end at 75%, recipe
+selection occupies 75%–82.5%, loss calibration occupies 82.5%–90%, and confirmation
+occupies the remaining 10%. Each scoring stage uses up to 24 representative,
+complete, non-overlapping target windows chosen without inspecting their labels.
+Their origins stay on the dataset's original stride grid; fraction boundaries
+are not shifted, and the first eligible origin is rounded upward to that grid.
+Fresh DLinear fits, including its internal scaler and validation, stay within
+the 60% prefix; its geometry and memory targets start after that cutoff.
+Lookback-fitted and frozen pretrained experts receive only each origin's past.
+The original default recipes compete for a fixed incumbent on selection data.
+Confirmation targets cannot choose recipes, variants, losses, or weights.
 
-Default `--quality-policy required` requires at least four complete confirmation
-windows, MSE at least 1% below a fixed-period SeasonalNaive reference, MSE no worse
+Keep a valid original recipe plus up to `--retain-variants 3` distinct tuned
+versions per family. Prediction-equivalent versions are removed using selection
+outputs only. In each fixed medoid cluster, calibration activates one estimated
+best variant per family, optionally limiting the number of active families.
+Thus identical copies do not gain weight through their count. Historical losses
+use completed geometry targets and then earlier calibration targets only.
+The prequential search chooses the lowest-MSE feasible policy subject to the
+fixed incumbent's MAE guard, with the fixed incumbent also an explicit candidate.
+No quality threshold is silently relaxed when a policy is infeasible.
+
+Normalized mode defines `L = shrunken historical validation MSE /
+(historical SeasonalNaive MSE * temperature)` and applies `softmax(-L)`.
+Temperature candidates are 0.25, 0.5, 1, 2, 4, 8, 16, and 64; cluster shrinkage
+strengths are 0, 4, and 16. Both are selected before confirmation and stored with
+the active variants and calibration trace. This makes the scale and weight
+policy explicit while retaining historical-loss softmax aggregation; these new
+preparation settings do not identify the parameters of historical paper runs.
+`--loss-mode raw` disables loss normalization and temperature/shrinkage search
+(temperature 1, shrinkage 0). Variant selection and the fixed-incumbent candidate
+remain available; this option does not convert a version-3 bank into version 2.
+Version-2 libraries retain their stored raw-loss behavior when loaded.
+
+Case limits uniformly cover eligible origins instead of taking the first N.
+After calibration, additional past references may be added without changing
+the fixed medoids or their calibrated losses. Actual populated row/time ranges,
+eligible boundaries, and model fit cutoffs are stored separately. The saved
+library ends before confirmation, and that exact frozen library is scored.
+
+Default `--quality-policy required` requires at least four complete calibration
+and four complete confirmation windows, MSE at least 1% below a fixed-period SeasonalNaive reference, MSE no worse
 than the untuned incumbent, and MAE no worse than either reference. The incumbent
 is the default expert recipe chosen before confirmation by selection MSE, then
 MAE. Numerical ties at the zero-error floor are allowed. A failed gate stops
@@ -51,25 +83,66 @@ initialization before teacher exploration and names its saved report.
 `--quality-policy report` prepares a diagnostic bundle with `quality_passed`
 still reported. It does not turn a failed criterion into a successful one.
 
+`--promotion-policy none` preserves this frozen-prior confirmation behavior.
+Explicit `--promotion-policy conservative` freezes up to three distinct global
+policies before scoring the tail: the prepared ensemble, the original-default
+champion chosen on earlier calibration data, and the selection incumbent.
+Every policy faces the same origins and unchanged readiness criteria. Qualified
+policies are ranked by MSE, MAE, then a deterministic preference for fixed
+policies on ties. No qualifying policy produces no promoted artifact.
+The prepared bank, candidate identities, original reports, and selected artifact
+are retained separately for recovery and inspection.
+
+In conservative mode, the tail is **training-side promotion validation used for
+policy selection**, with `independent_quality_verified=false`. Its scores are
+not independent test evidence. Loss fitting and expert recipes remain frozen
+before that interval; policy selection uses its labels and records their exact
+availability boundary. Promoted inference requires timestamps at or after that
+boundary. Row-only inputs remain supported with promotion disabled.
+Experience Memory uses the prepared training bank and excludes promotion
+targets. The returned `memory_anchor_library` and inference `anchor_library`
+paths identify the different roles explicitly. Keep a separate test CSV outside
+all initialization and policy choices.
+
 This gate assesses the prepared Anchorer prior. Teacher exploration and local
 forecaster training are separate stages; it is not an end-to-end forecasting
-quality result. Confirmation results are not fed back into parameter selection.
-Use `--validation-fraction`, `--tuning-rounds`, and `--max-windows` to control
-preparation. A capped initialization is a smaller library, not a full-data run.
+quality result. With promotion disabled, confirmation results are not fed back
+into selection.
+Use `--fit-fraction`, `--selection-start-fraction`,
+`--calibration-start-fraction`, `--confirmation-start-fraction`,
+`--tuning-rounds`, and `--max-windows` to control preparation.
+`--validation-fraction` remains a legacy tail-boundary alias and cannot be mixed
+with explicit stage fractions. A capped initialization is a smaller library,
+not a full-data run. Scoring-window caps are separate from the case count cap.
 
 The next stage uses the frozen teacher for candidate tool-use trajectories and
 saves successful experience memory. It does not train the local 4B forecaster.
+Its complete target windows stay before the confirmation boundary and, for
+prefix-trained experts, start at or after the actual global model fit cutoff.
 After every dataset is complete, the command returns the cross-domain memory
 path and per-dataset library paths. `--anchors-only` ends after expert cases;
 it does not claim that experience memory is ready.
 
-Defaults are SeasonalNaive, HistoricAverage, AutoARIMA, and Theta. Inspect
-`initialize --list-models` to choose other experts. Ridge uses NumPy; XGBoost and
+Without `--models` or `--expert-preset`, the compatible native defaults remain
+SeasonalNaive, HistoricAverage, AutoARIMA, and Theta (`.[initialization]`).
+The recommended `--expert-preset balanced` selects SeasonalNaive, HistoricAverage,
+AutoARIMA, Theta, Ridge, DLinear, and ChronosBoltBase (`.[casebank]`). Presets and `--models`
+are mutually exclusive. DLinear prepares up to three fresh moving-average
+kernel variants, 25, 7, and 49, with `--dlinear-epochs 20`. It does not import
+legacy checkpoints with unknown scalers or fit cutoffs. Chronos-Bolt Base uses
+the native median-quantile API with local `amazon/chronos-bolt-base` weights at
+`<model-store>/ChronosBoltBase`. `--model-device cpu` is explicit; select
+`cuda:0` when suitable hardware is available.
+
+Inspect `initialize --list-models` for all choices. Ridge uses NumPy; XGBoost and
 LightGBM require `.[expert-ml]`; ChronosTiny requires `.[foundation]` and local
 `amazon/chronos-t5-tiny` weights at `<model-store>/ChronosTiny`. Native experts
-save recipes and fit each lookback. `--download-models` explicitly allows
-preparing missing selected pretrained weights. A missing selected dependency
-or weight stops initialization before the ensemble is built.
+save recipes and fit each lookback. `--download-models` explicitly permits
+preparing missing selected pretrained weights. Missing selected dependencies
+or weights stop initialization; models are never silently removed.
+The registry uses daily periods of 24 for hourly data and 96 for 15-minute
+WP/SP/ETTm data. When replaying an older library, pass its stored period
+explicitly; incompatible query periods are rejected instead of reinterpreted.
 
 Runtime files default to `../castflow_runtime/initialization`, with prepared
 experts under `../castflow_runtime/models`. Identical inputs and settings resume
@@ -134,9 +207,10 @@ refer to changing checkpoints.
 | Diagnostic reuse | `current_plan`, scoped to one request |
 
 These settings are configurable. The selected expert parameters and input
-identities are stored with initialized libraries. Library v2 uses combined
-normalized DTW, Euclidean, and cosine distances and historical-MSE softmax
-weights. `build-anchorer --anchor-distance-weights` can set the three distance
+identities are stored with initialized libraries. Libraries use combined
+normalized DTW, Euclidean, and cosine distances. Version 2 retains historical-MSE
+softmax weights; version 3 also records explicit loss calibration and any policy
+promotion separately. `build-anchorer --anchor-distance-weights` can set the three distance
 coefficients. An old library must contain recoverable expert losses to migrate;
 winner counts alone cannot reconstruct those losses.
 

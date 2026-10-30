@@ -45,6 +45,55 @@ from utils.metrics import mae, mse
 T = TypeVar("T")
 
 
+def bounded_memory_windows(
+    dataset,
+    lookback,
+    horizon,
+    *,
+    stride=None,
+    max_windows=None,
+    start_origin_row=None,
+    end_row=None,
+):
+    """Return source origins and windows on the original chronological stride grid."""
+    for name, value in (("lookback", lookback), ("horizon", horizon)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
+    step = horizon if stride is None else stride
+    if isinstance(step, bool) or not isinstance(step, int) or step < 1:
+        raise ValueError("memory stride must be a positive integer")
+    if max_windows is not None and (
+        isinstance(max_windows, bool)
+        or not isinstance(max_windows, int)
+        or max_windows < 1
+    ):
+        raise ValueError("max_windows must be a positive integer or None")
+    start = lookback if start_origin_row is None else start_origin_row
+    stop = len(dataset.frame) if end_row is None else end_row
+    for name, value in (("start_origin_row", start), ("end_row", stop)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be an integer row boundary")
+    if not lookback <= start < stop <= len(dataset.frame):
+        raise ValueError("memory target boundaries must stay within the training CSV")
+    first = lookback + max(0, (start - lookback + step - 1) // step) * step
+    windows = []
+    for origin in range(first, stop - horizon + 1, step):
+        windows.append(
+            (
+                origin,
+                TimeSeriesWindow(
+                    history=dataset.frame.iloc[origin - lookback : origin].copy(),
+                    future=dataset.frame.iloc[origin : origin + horizon].copy(),
+                    target_col=dataset.target_col,
+                    timestamp_col=dataset.timestamp_col,
+                ),
+            )
+        )
+        if max_windows is not None and len(windows) >= max_windows:
+            break
+    return windows
+
+
 class CastFlow:
     """Planning-action-forecasting-reflection workflow."""
 
@@ -581,6 +630,8 @@ class CastFlow:
         covariate_issued_at: str | None = None,
         covariate_issue_col: str = "issued_at",
         completion_journal_dir: str | Path | None = None,
+        start_origin_row: int | None = None,
+        end_row: int | None = None,
     ) -> StrategyMemory:
         worker = copy.copy(self)
         worker.config = replace(self.config, allow_train_only_tools=True)
@@ -596,6 +647,8 @@ class CastFlow:
             covariate_issued_at,
             covariate_issue_col,
             completion_journal_dir,
+            start_origin_row,
+            end_row,
         )
         self.memory = memory
         return memory
@@ -613,6 +666,8 @@ class CastFlow:
         covariate_issued_at: str | None = None,
         covariate_issue_col: str = "issued_at",
         completion_journal_dir: str | Path | None = None,
+        start_origin_row: int | None = None,
+        end_row: int | None = None,
     ) -> StrategyMemory:
         previous_train_only = self.config.allow_train_only_tools
         self.config.allow_train_only_tools = True
@@ -628,17 +683,20 @@ class CastFlow:
                 != source_fingerprint
             ):
                 raise ValueError("training CSV changed while loading the memory inputs")
-            windows = make_windows(
+            source_windows = bounded_memory_windows(
                 dataset,
                 lookback=self.config.lookback,
                 horizon=self.config.horizon,
                 stride=stride,
                 max_windows=max_windows,
+                start_origin_row=start_origin_row,
+                end_row=end_row,
             )
-            if not windows:
+            if not source_windows:
                 raise ValueError(
                     "no windows could be built; check lookback/horizon against dataset length"
                 )
+            source_origins, windows = zip(*source_windows)
 
             output = Path(output_path)
             if resume and output.exists():
@@ -672,6 +730,9 @@ class CastFlow:
                     "covariate_issued_at": covariate_issued_at,
                     "covariate_issue_col": covariate_issue_col,
                     "stride": stride,
+                    "start_origin_row": start_origin_row,
+                    "end_row": end_row,
+                    "source_origins": list(source_origins),
                 }
             )
             build_fingerprint = digest(build_identity)
@@ -732,11 +793,16 @@ class CastFlow:
                             source_fingerprint,
                             build_fingerprint,
                             verbose_samples,
+                            source_origins[idx],
                         )
                     if journal is not None:
                         outcome = journal.run(
                             f"window:{idx}",
-                            {"input_json": input_json, "window_idx": idx},
+                            {
+                                "input_json": input_json,
+                                "window_idx": idx,
+                                "source_origin_row": source_origins[idx],
+                            },
                             complete,
                         )
                         entry = self._matching_memory_entry(
@@ -783,7 +849,14 @@ class CastFlow:
         return matches[0] if matches else None
 
     def _retain_memory_window(
-        self, window, idx, output_path, source_fingerprint, build_fingerprint, verbose
+        self,
+        window,
+        idx,
+        output_path,
+        source_fingerprint,
+        build_fingerprint,
+        verbose,
+        source_origin_row=None,
     ):
         result = self.run_memory_window(window, window_idx=idx, verbose=verbose)
         if result.metrics.get("memory_save", 0.0) < 1.0:
@@ -817,6 +890,8 @@ class CastFlow:
             dataset_name=self.config.dataset_name,
         )
         entry = self.memory.entries[-1]
+        if source_origin_row is not None:
+            entry["source_origin_row"] = source_origin_row
         entry["source_fingerprint"], entry["build_fingerprint"] = (
             source_fingerprint,
             build_fingerprint,

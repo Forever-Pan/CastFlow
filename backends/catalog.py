@@ -18,6 +18,15 @@ from utils.io import atomic_write_json
 
 
 DEFAULT_MODELS = ("SeasonalNaive", "HistoricAverage", "AutoARIMA", "Theta")
+BALANCED_MODELS = (
+    "SeasonalNaive",
+    "HistoricAverage",
+    "AutoARIMA",
+    "Theta",
+    "Ridge",
+    "DLinear",
+    "ChronosBoltBase",
+)
 _CATALOG = {
     "SeasonalNaive": {
         "kind": "seasonal_naive",
@@ -57,6 +66,23 @@ _CATALOG = {
         "fit_scope": "pretrained_frozen",
         "repository": "amazon/chronos-t5-tiny",
     },
+    "ChronosBoltBase": {
+        "kind": "chronos_bolt",
+        "dependencies": [
+            "torch",
+            "chronos",
+            "transformers",
+            "huggingface_hub",
+            "safetensors",
+        ],
+        "fit_scope": "pretrained_frozen",
+        "repository": "amazon/chronos-bolt-base",
+    },
+    "DLinear": {
+        "kind": "dlinear",
+        "dependencies": ["torch", "safetensors"],
+        "fit_scope": "training_prefix",
+    },
 }
 _PACKAGES = {"chronos": "chronos-forecasting", "huggingface_hub": "huggingface-hub"}
 
@@ -68,7 +94,8 @@ def list_model_catalog() -> list[dict[str, Any]]:
             name=name,
             **copy.deepcopy(entry),
             default=name in DEFAULT_MODELS,
-            local_weights_required=entry["kind"] == "chronos",
+            balanced_preset=name in BALANCED_MODELS,
+            local_weights_required=entry["kind"] in {"chronos", "chronos_bolt"},
         )
         for name, entry in _CATALOG.items()
     ]
@@ -97,15 +124,36 @@ def selected_model_names(models: Sequence[str] | None) -> list[str]:
 
 
 def preflight_models(
-    names: Sequence[str], model_store: str | Path, *, download_models: bool = False
+    names: Sequence[str],
+    model_store: str | Path,
+    *,
+    download_models: bool = False,
+    device: str = "cpu",
 ) -> dict[str, Any]:
     """Check all requested dependencies and local assets before any model is loaded."""
     store = Path(model_store).expanduser().resolve()
+    names = selected_model_names(names)
+    from backends.experts import validate_device
+
+    device = validate_device(device)
+    if device.startswith("cuda") and any(
+        _CATALOG[name]["kind"] in {"chronos", "chronos_bolt", "dlinear"}
+        for name in names
+    ):
+        try:
+            import torch
+        except ImportError as exc:
+            raise ValueError("CUDA forecasting experts require PyTorch") from exc
+        if (
+            not torch.cuda.is_available()
+            or int(device.split(":")[1]) >= torch.cuda.device_count()
+        ):
+            raise ValueError("requested forecasting expert CUDA device is unavailable")
     if store.exists() and not store.is_dir():
         raise ValueError(f"model_store is not a directory: {store}")
     details = {}
     errors = []
-    for name in selected_model_names(names):
+    for name in names:
         entry = _CATALOG[name]
         folder = store / name
         if folder.exists() and not folder.is_dir():
@@ -124,11 +172,11 @@ def preflight_models(
             except PackageNotFoundError:
                 packages[distribution] = "unversioned" if available else "missing"
         assets = {}
-        if entry["kind"] == "chronos":
+        if entry["kind"] in {"chronos", "chronos_bolt"}:
             try:
-                assets = chronos_assets(folder)
+                assets = chronos_assets(folder, expected_kind=entry["kind"])
             except (ValueError, OSError, json.JSONDecodeError) as exc:
-                if not download_models:
+                if not download_models or isinstance(exc, ModelAssetMismatchError):
                     errors.append(
                         f"{name}: {exc}. Prepare weights at {folder} or explicitly enable --download-models"
                     )
@@ -139,11 +187,24 @@ def preflight_models(
 
 
 def prepare_models(
-    names: Sequence[str], model_store: str | Path, *, download_models: bool = False
+    names: Sequence[str],
+    model_store: str | Path,
+    *,
+    download_models: bool = False,
+    device: str = "cpu",
 ) -> list[dict[str, Any]]:
     """Persist model recipes; download pretrained weights only with explicit permission."""
     names = selected_model_names(names)
-    details = preflight_models(names, model_store, download_models=download_models)
+    from backends.experts import validate_device
+
+    device = validate_device(device)
+    if "DLinear" in names:
+        raise ValueError(
+            "DLinear requires dataset-specific prepare_dlinear_experts after source-prefix preflight"
+        )
+    details = preflight_models(
+        names, model_store, download_models=download_models, device=device
+    )
     store = Path(model_store).expanduser().resolve()
     result = []
     for name in names:
@@ -152,11 +213,15 @@ def prepare_models(
         folder.mkdir(parents=True, exist_ok=True)
         spec: dict[str, Any] = {"name": name, "kind": entry["kind"]}
         assets = details[name]["existing_assets"]
-        if entry["kind"] == "chronos":
+        if entry["kind"] in {"chronos", "chronos_bolt"}:
             if not assets:
                 if not download_models:
                     raise FileNotFoundError(
                         f"pretrained weights not available at {folder}"
+                    )
+                if folder.is_symlink():
+                    raise ValueError(
+                        "cannot download through an external model symlink; prepare its complete weights first"
                     )
                 from huggingface_hub import snapshot_download
 
@@ -168,6 +233,8 @@ def prepare_models(
                             "*.json",
                             "*.safetensors",
                             "pytorch_model*.bin",
+                            "README.md",
+                            "LICENSE*",
                         ],
                     )
                 except Exception as exc:
@@ -175,16 +242,22 @@ def prepare_models(
                         f"Could not prepare {name} from {entry['repository']}. "
                         f"Check repository access or place its complete weights at {folder}, then resume."
                     ) from exc
-                assets = chronos_assets(folder)
+                assets = chronos_assets(folder, expected_kind=entry["kind"])
             spec["model_path"] = str(folder)
             spec["model_identity"] = content_fingerprint(assets)
-            spec["params"] = {
-                "num_samples": 20,
-                "temperature": 1.0,
-                "top_k": 50,
-                "top_p": 1.0,
-                "seed": 0,
-            }
+            spec["device"] = device
+            spec["family"] = name
+            spec["params"] = (
+                {}
+                if entry["kind"] == "chronos_bolt"
+                else {
+                    "num_samples": 20,
+                    "temperature": 1.0,
+                    "top_k": 50,
+                    "top_p": 1.0,
+                    "seed": 0,
+                }
+            )
         record = {
             "name": name,
             "fit_scope": entry["fit_scope"],
@@ -194,24 +267,42 @@ def prepare_models(
         }
         if "repository" in entry:
             record["repository"] = entry["repository"]
-        atomic_write_json(folder / "prepared_model.json", record)
+        record_path = (
+            store / f"{name}.prepared_model.json"
+            if folder.is_symlink()
+            else folder / "prepared_model.json"
+        )
+        atomic_write_json(record_path, record)
         result.append(spec)
     return validate_expert_specs(result)
 
 
 def candidate_parameters(
-    spec: dict[str, Any], *, lookback: int, seasonal_period: int,
-    tuning_rounds: int, seed: int,
+    spec: dict[str, Any],
+    *,
+    lookback: int,
+    seasonal_period: int,
+    tuning_rounds: int,
+    seed: int,
+    horizon: int | None = None,
 ) -> list[dict[str, Any]]:
     """Return distinct recipes with an unchanged baseline and stable budget prefixes.
 
     The budget counts attempted recipes. Finite simple-model spaces stop when
     exhausted. Stochastic model seeds are held fixed across all candidates.
     """
-    if isinstance(tuning_rounds, bool) or not isinstance(tuning_rounds, int) or not 1 <= tuning_rounds <= 256:
+    if (
+        isinstance(tuning_rounds, bool)
+        or not isinstance(tuning_rounds, int)
+        or not 1 <= tuning_rounds <= 256
+    ):
         raise ValueError("tuning_rounds must be an integer between 1 and 256")
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
         raise ValueError("seed must be a nonnegative integer")
+    if horizon is not None and (
+        isinstance(horizon, bool) or not isinstance(horizon, int) or horizon < 1
+    ):
+        raise ValueError("horizon must be a positive integer or None")
     space = _candidate_space(spec, lookback, seasonal_period, seed)
     import numpy as np
 
@@ -219,19 +310,54 @@ def candidate_parameters(
     budget = min(tuning_rounds, space.capacity)
     if budget == 1:
         return result
+    seen = {content_fingerprint(space.effective_baseline or space.baseline)}
+    kind = spec["kind"]
+    if kind in {"seasonal_naive", "historic_average"}:
+        key = "season_length" if kind == "seasonal_naive" else "window"
+        for period in (
+            seasonal_period,
+            lookback,
+            horizon if horizon is not None else spec.get("horizon", lookback),
+            seasonal_period // 2,
+            seasonal_period * 2,
+            seasonal_period * 3,
+            seasonal_period * 7,
+            1,
+        ):
+            if not isinstance(period, int) or not 1 <= period <= lookback:
+                continue
+            params = {key: period}
+            fingerprint = content_fingerprint(params)
+            if fingerprint not in seen:
+                result.append(params)
+                seen.add(fingerprint)
+            if len(result) >= budget:
+                return result
     rng = np.random.default_rng(seed)
     for index in rng.permutation(space.alternative_count):
         params = space.alternative(int(index))
-        if space.is_baseline(params):
+        fingerprint = content_fingerprint(params)
+        if space.is_baseline(params) or fingerprint in seen:
             continue
         result.append(params)
+        seen.add(fingerprint)
         if len(result) >= budget:
             break
     return result
 
 
-def candidate_capacity(spec: dict[str, Any], *, lookback: int, seasonal_period: int) -> int:
+def candidate_capacity(
+    spec: dict[str, Any],
+    *,
+    lookback: int,
+    seasonal_period: int,
+    horizon: int | None = None,
+) -> int:
     """Return the actual finite search-space size before applying a tuning budget."""
+    if horizon is not None and (
+        isinstance(horizon, bool) or not isinstance(horizon, int) or horizon < 1
+    ):
+        raise ValueError("horizon must be a positive integer or None")
     return _candidate_space(spec, lookback, seasonal_period).capacity
 
 
@@ -254,9 +380,11 @@ class _CandidateSpace:
         if self.explicit_alternatives is not None:
             return 1 + len(self.explicit_alternatives)
         baseline = self.effective_baseline or self.baseline
-        included = (set(baseline) == set(self.fixed) | {name for name, _ in self.axes}
-                    and all(baseline.get(name) == value for name, value in self.fixed.items())
-                    and all(baseline.get(name) in values for name, values in self.axes))
+        included = (
+            set(baseline) == set(self.fixed) | {name for name, _ in self.axes}
+            and all(baseline.get(name) == value for name, value in self.fixed.items())
+            and all(baseline.get(name) in values for name, values in self.axes)
+        )
         return self.alternative_count + (0 if included else 1)
 
     def is_baseline(self, params: dict[str, Any]) -> bool:
@@ -272,27 +400,48 @@ class _CandidateSpace:
         return params
 
 
-def _candidate_space(spec: dict[str, Any], lookback: int, seasonal_period: int, seed: int = 0) -> _CandidateSpace:
-    for name, value, minimum in (("lookback", lookback, 2), ("seasonal_period", seasonal_period, 1)):
+def _candidate_space(
+    spec: dict[str, Any], lookback: int, seasonal_period: int, seed: int = 0
+) -> _CandidateSpace:
+    for name, value, minimum in (
+        ("lookback", lookback, 2),
+        ("seasonal_period", seasonal_period, 1),
+    ):
         if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
             raise ValueError(f"{name} must be an integer >= {minimum}")
     kind = spec["kind"]
     if kind == "seasonal_naive":
         baseline = {"season_length": seasonal_period}
-        return _CandidateSpace(baseline, [{"season_length": period} for period in range(1, lookback+1)
-                                          if period != min(seasonal_period, lookback)])
+        return _CandidateSpace(
+            baseline,
+            [
+                {"season_length": period}
+                for period in range(1, lookback + 1)
+                if period != min(seasonal_period, lookback)
+            ],
+            effective_baseline={"season_length": min(seasonal_period, lookback)},
+        )
     if kind == "historic_average":
-        return _CandidateSpace({"window": lookback}, axes=(("window", tuple(range(1, lookback+1))),))
+        return _CandidateSpace(
+            {"window": lookback}, axes=(("window", tuple(range(1, lookback + 1))),)
+        )
     if kind == "zero":
         return _CandidateSpace({}, [])
+    if kind in {"dlinear", "chronos_bolt"}:
+        return _CandidateSpace(dict(spec.get("params", {})), [])
     if kind == "theta":
         baseline = {"deseasonalize": True, "period": seasonal_period}
-        baseline_period = seasonal_period if 1 < seasonal_period <= lookback//2 else None
+        baseline_period = (
+            seasonal_period if 1 < seasonal_period <= lookback // 2 else None
+        )
         alternatives = []
         if baseline_period is not None:
             alternatives.append({"deseasonalize": False, "period": seasonal_period})
-        alternatives.extend({"deseasonalize": True, "period": period} for period in range(2, lookback//2+1)
-                            if period != baseline_period)
+        alternatives.extend(
+            {"deseasonalize": True, "period": period}
+            for period in range(2, lookback // 2 + 1)
+            if period != baseline_period
+        )
         return _CandidateSpace(baseline, alternatives)
     if kind == "auto_arima":
         baseline = {"max_p": 2, "max_q": 2, "d_values": [0, 1]}
@@ -301,8 +450,13 @@ def _candidate_space(spec: dict[str, Any], lookback: int, seasonal_period: int, 
         difference_sets = ((0,), (1,), (2,), (0, 1), (0, 2), (1, 2), (0, 1, 2))
 
         def orders(params):
-            return tuple((p, d, q) for p in range(params["max_p"]+1) for d in params["d_values"]
-                         for q in range(params["max_q"]+1) if lookback > p+d+q+3)
+            return tuple(
+                (p, d, q)
+                for p in range(params["max_p"] + 1)
+                for d in params["d_values"]
+                for q in range(params["max_q"] + 1)
+                if lookback > p + d + q + 3
+            )
 
         seen = {orders(baseline)}
         alternatives = []
@@ -316,30 +470,87 @@ def _candidate_space(spec: dict[str, Any], lookback: int, seasonal_period: int, 
     if kind in {"ridge", "xgboost", "lightgbm"}:
         if lookback < 3:
             raise ValueError("autoregressive expert tuning requires lookback >= 3")
-        short = min(12, max(1, lookback//4))
-        cap = min(128, lookback-2, max(1, lookback//2))
-        values = set(range(1, min(32, cap)+1))
-        values.update(min(cap, max(1, value)) for value in (short, seasonal_period//2, seasonal_period, 2*seasonal_period, lookback//3, cap))
+        short = min(12, max(1, lookback // 4))
+        cap = min(128, lookback - 2, max(1, lookback // 2))
+        values = set(range(1, min(32, cap) + 1))
+        values.update(
+            min(cap, max(1, value))
+            for value in (
+                short,
+                seasonal_period // 2,
+                seasonal_period,
+                2 * seasonal_period,
+                lookback // 3,
+                cap,
+            )
+        )
         lags = tuple(sorted(values))
         if kind == "ridge":
-            levels = (0.0, 1e-6, 1e-5, 1e-4, .001, .01, .03, .1, .3, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0, 3000.0, 10000.0)
-            return _CandidateSpace({"lags": short, "alpha": 1.0}, axes=(("lags", lags), ("alpha", levels)))
-        baseline = {"lags": short, "n_estimators": 100, "max_depth": 3, "learning_rate": .05, "reg_lambda": 1.0, "seed": seed}
-        return _CandidateSpace(baseline, axes=(("lags", lags), ("n_estimators", (25, 50, 100, 200, 400)),
-                                               ("max_depth", (1, 2, 3, 4, 6)), ("learning_rate", (.02, .05, .1, .2)),
-                                               ("reg_lambda", (0.0, .1, 1.0, 10.0, 100.0))), fixed={"seed": seed})
+            levels = (
+                0.0,
+                1e-6,
+                1e-5,
+                1e-4,
+                0.001,
+                0.01,
+                0.03,
+                0.1,
+                0.3,
+                1.0,
+                3.0,
+                10.0,
+                30.0,
+                100.0,
+                300.0,
+                1000.0,
+                3000.0,
+                10000.0,
+            )
+            return _CandidateSpace(
+                {"lags": short, "alpha": 1.0}, axes=(("lags", lags), ("alpha", levels))
+            )
+        baseline = {
+            "lags": short,
+            "n_estimators": 100,
+            "max_depth": 3,
+            "learning_rate": 0.05,
+            "reg_lambda": 1.0,
+            "seed": seed,
+        }
+        return _CandidateSpace(
+            baseline,
+            axes=(
+                ("lags", lags),
+                ("n_estimators", (25, 50, 100, 200, 400)),
+                ("max_depth", (1, 2, 3, 4, 6)),
+                ("learning_rate", (0.02, 0.05, 0.1, 0.2)),
+                ("reg_lambda", (0.0, 0.1, 1.0, 10.0, 100.0)),
+            ),
+            fixed={"seed": seed},
+        )
     if kind == "chronos":
         base = dict(spec.get("params", {}))
         baseline = dict(base, seed=seed, temperature=1.0, num_samples=20)
         effective = {"top_k": 50, "top_p": 1.0, **baseline}
-        return _CandidateSpace(baseline, axes=(("num_samples", (10, 20, 40, 80)),
-                                               ("temperature", (.5, .7, .9, 1.0, 1.1, 1.3)),
-                                               ("top_k", (20, 50, 100)), ("top_p", (.8, .9, .95, 1.0))),
-                               fixed={"seed": seed}, effective_baseline=effective)
+        return _CandidateSpace(
+            baseline,
+            axes=(
+                ("num_samples", (10, 20, 40, 80)),
+                ("temperature", (0.5, 0.7, 0.9, 1.0, 1.1, 1.3)),
+                ("top_k", (20, 50, 100)),
+                ("top_p", (0.8, 0.9, 0.95, 1.0)),
+            ),
+            fixed={"seed": seed},
+            effective_baseline=effective,
+        )
     raise ValueError(f"unsupported expert tuning kind: {kind!r}")
 
 
-def chronos_assets(folder: Path) -> dict[str, str]:
+class ModelAssetMismatchError(ValueError):
+    pass
+
+
+def chronos_assets(folder: Path, expected_kind: str | None = None) -> dict[str, str]:
     config = folder / "config.json"
     if not config.is_file():
         raise ValueError("local Chronos config.json is missing")
@@ -347,7 +558,63 @@ def chronos_assets(folder: Path) -> dict[str, str]:
     if not isinstance(payload, dict) or not isinstance(
         payload.get("chronos_config"), dict
     ):
-        raise ValueError("local config is not a Chronos-T5 model configuration")
+        raise ModelAssetMismatchError(
+            "local config is not a supported Chronos model configuration"
+        )
+    chronos = payload["chronos_config"]
+    kind = "chronos_bolt" if "input_patch_size" in chronos else "chronos"
+    if expected_kind is not None and kind != expected_kind:
+        raise ModelAssetMismatchError(
+            f"prepared model has kind {kind}, expected {expected_kind}"
+        )
+    for key in ("context_length", "prediction_length"):
+        if (
+            isinstance(chronos.get(key), bool)
+            or not isinstance(chronos.get(key), int)
+            or chronos[key] < 1
+        ):
+            raise ModelAssetMismatchError(f"Chronos config requires a positive {key}")
+    if kind == "chronos_bolt":
+        if payload.get(
+            "chronos_pipeline_class"
+        ) != "ChronosBoltPipeline" or payload.get("architectures") != [
+            "ChronosBoltModelForForecasting"
+        ]:
+            raise ModelAssetMismatchError(
+                "Chronos-Bolt config must declare its quantile pipeline and architecture"
+            )
+        quantiles = chronos.get("quantiles")
+        if (
+            not isinstance(quantiles, list)
+            or not quantiles
+            or any(
+                isinstance(q, bool)
+                or not isinstance(q, (int, float))
+                or not math.isfinite(q)
+                or not 0 < q < 1
+                for q in quantiles
+            )
+            or quantiles != sorted(set(quantiles))
+            or 0.5 not in quantiles
+        ):
+            raise ModelAssetMismatchError(
+                "Chronos-Bolt config must include ordered quantiles and a median"
+            )
+    else:
+        if (
+            not isinstance(chronos.get("tokenizer_class"), str)
+            or payload.get("model_type") != "t5"
+        ):
+            raise ModelAssetMismatchError(
+                "Chronos-T5 config requires its T5 numeric tokenizer architecture"
+            )
+        if (
+            payload.get("chronos_pipeline_class", "ChronosPipeline")
+            != "ChronosPipeline"
+        ):
+            raise ModelAssetMismatchError(
+                "Chronos-T5 config declares a different prediction pipeline"
+            )
     weights = sorted(folder.glob("*.safetensors")) or sorted(
         folder.glob("pytorch_model*.bin")
     )

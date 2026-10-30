@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import warnings
+import copy
 from collections import Counter
 from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass, field
@@ -36,6 +37,9 @@ class AnchorCase:
     best_model: str
     model_errors: dict[str, float]
     model_failures: dict[str, str] = field(default_factory=dict)
+    history_start_row: int | None = None
+    target_start_row: int | None = None
+    target_end_row: int | None = None
 
 
 @dataclass(slots=True)
@@ -48,6 +52,9 @@ class AnchorCluster:
     size: int
     model_errors: dict[str, float] = field(default_factory=dict)
     case_ids: list[int] = field(default_factory=list)
+    weighting_losses: dict[str, float] = field(default_factory=dict)
+    calibration_count: int = 0
+    reference_case_ids: list[int] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -64,6 +71,9 @@ class AnchorLibrary:
     clusters: list[AnchorCluster]
     expert_specs: list[dict[str, Any]] = field(default_factory=list)
     distance_weights: tuple[float, float, float] = (1 / 3, 1 / 3, 1 / 3)
+    coverage: dict[str, Any] = field(default_factory=dict)
+    calibration: dict[str, Any] = field(default_factory=dict)
+    promotion: dict[str, Any] = field(default_factory=dict)
 
     def save(self, path: str | Path) -> Path:
         output = Path(path)
@@ -84,6 +94,9 @@ class AnchorLibrary:
             "weighting": "historical_loss_softmax",
             "distance_weights": list(self.distance_weights),
             "expert_specs": self.expert_specs,
+            "coverage": self.coverage,
+            "calibration": self.calibration,
+            **({"promotion": copy.deepcopy(self.promotion)} if self.promotion else {}),
             "cases": [asdict(case) for case in self.cases],
             "clusters": [asdict(cluster) for cluster in self.clusters],
             "case_base": [
@@ -104,6 +117,9 @@ class AnchorLibrary:
                     "total_weight": cluster.total_weight,
                     "model_errors": cluster.model_errors,
                     "case_ids": cluster.case_ids,
+                    "weighting_losses": cluster.weighting_losses,
+                    "calibration_count": cluster.calibration_count,
+                    "reference_case_ids": cluster.reference_case_ids,
                 }
                 for cluster in self.clusters
             ],
@@ -166,9 +182,15 @@ class AnchorLibrary:
             )
         for cluster in clusters:
             validate_model_errors(cluster.model_errors)
+            if cluster.weighting_losses:
+                validate_model_errors(cluster.weighting_losses)
+                if not set(cluster.weighting_losses).issubset(cluster.model_errors):
+                    raise ValueError(
+                        "calibrated active experts are absent from raw loss metadata"
+                    )
             finite_vector(cluster.window, "cluster medoid")
         library = cls(
-            version="2",
+            version="3" if str(payload.get("version")) == "3" else "2",
             lookback=int(payload["lookback"]),
             horizon=int(payload["horizon"]),
             seasonal_period=int(payload["seasonal_period"]),
@@ -184,6 +206,9 @@ class AnchorLibrary:
                 else []
             ),
             distance_weights=weights,
+            coverage=copy.deepcopy(payload.get("coverage", {})),
+            calibration=copy.deepcopy(payload.get("calibration", {})),
+            promotion=copy.deepcopy(payload.get("promotion", {})),
         )
         if library.lookback < 2 or library.horizon < 1 or library.seasonal_period < 1:
             raise ValueError(
@@ -201,6 +226,48 @@ class AnchorLibrary:
             raise ValueError("anchor representations do not match the library lookback")
         if len({case.case_id for case in cases}) != len(cases):
             raise ValueError("anchor case IDs must be unique")
+        if not isinstance(library.coverage, dict) or not isinstance(
+            library.calibration, dict
+        ):
+            raise ValueError("anchor coverage and calibration metadata must be objects")
+        if library.calibration and any(
+            not cluster.weighting_losses for cluster in clusters
+        ):
+            raise ValueError("calibrated library is missing cluster weighting losses")
+        if (
+            any(cluster.weighting_losses for cluster in clusters)
+            and not library.calibration
+        ):
+            raise ValueError(
+                "calibrated weighting losses require their historical calibration metadata"
+            )
+        for case in cases:
+            rows = (case.history_start_row, case.target_start_row, case.target_end_row)
+            if any(value is not None for value in rows) and (
+                any(
+                    isinstance(value, bool) or not isinstance(value, int) or value < 0
+                    for value in rows
+                )
+                or case.target_start_row != case.history_start_row + library.lookback
+                or case.target_end_row != case.target_start_row + library.horizon
+            ):
+                raise ValueError(
+                    "anchor case row boundaries do not match its dimensions"
+                )
+        if library.calibration:
+            families = expert_families(library)
+            for cluster in clusters:
+                active = [families[name] for name in cluster.weighting_losses]
+                if len(active) != len(set(active)):
+                    raise ValueError(
+                        "calibrated clusters may activate only one variant per expert family"
+                    )
+        if not isinstance(library.promotion, dict):
+            raise ValueError("anchor promotion metadata must be an object")
+        if library.promotion:
+            from anchorer.policies import validate_promotion_metadata
+
+            validate_promotion_metadata(library)
         return library
 
 
@@ -220,32 +287,17 @@ def build_anchor_library(
     expert_manifest: str | Path | None = None,
     distance_weights: tuple[float, float, float] = (1 / 3, 1 / 3, 1 / 3),
     end_row: int | None = None,
+    start_row: int | None = None,
     checkpoint_dir: str | Path | None = None,
 ) -> AnchorLibrary:
     weights = normalize_distance_weights(distance_weights)
     expert_specs = load_expert_manifest(expert_manifest)
-    dataset = load_dataset(data_path, target_col, timestamp_col)
-    if end_row is not None:
-        if (
-            isinstance(end_row, bool)
-            or not isinstance(end_row, int)
-            or not 1 <= end_row <= len(dataset.frame)
-        ):
-            raise ValueError(
-                "end_row must be an exclusive row boundary within the source CSV"
-            )
-        dataset = DatasetView(
-            dataset.frame.iloc[:end_row].copy(),
-            dataset.target_col,
-            dataset.timestamp_col,
-        )
-    windows = make_windows(
-        dataset,
-        lookback=lookback,
-        horizon=horizon,
-        stride=stride,
-        max_windows=max_windows,
+    source = load_dataset(data_path, target_col, timestamp_col)
+    dataset, origins = _eligible_anchor_windows(
+        source, lookback, horizon, stride, start_row, end_row, max_windows
     )
+    _validate_expert_fit_cutoffs(expert_specs, origins[0] if origins else 0, data_path)
+    windows = [_window_at(dataset, origin, lookback, horizon) for origin in origins]
     if not windows:
         raise ValueError(
             "no anchor cases could be built; check lookback/horizon against dataset length"
@@ -262,6 +314,7 @@ def build_anchor_library(
         max_windows,
         expert_specs,
         weights,
+        origins,
     )
     cases = []
     for idx, window in enumerate(
@@ -284,8 +337,8 @@ def build_anchor_library(
             case = anchor_case_from_dict(payload["case"])
             if (
                 case.case_id != idx
-                or case.target_history != round_list(window.target_history)
-                or case.target_future != round_list(window.target_future)
+                or case.target_history != window.target_history.astype(float).tolist()
+                or case.target_future != window.target_future.astype(float).tolist()
             ):
                 raise ValueError(
                     f"anchor case checkpoint does not match its source window: {path}"
@@ -299,6 +352,9 @@ def build_anchor_library(
                 quiet_warnings=quiet_warnings,
                 expert_specs=expert_specs,
             )
+            case.history_start_row = origins[idx] - lookback
+            case.target_start_row = origins[idx]
+            case.target_end_row = origins[idx] + horizon
             if path is not None:
                 payload = {"identity": checkpoint_identity, "case": asdict(case)}
                 write_json(
@@ -306,7 +362,7 @@ def build_anchor_library(
                 )
         cases.append(case)
     return AnchorLibrary(
-        version="2",
+        version="3",
         lookback=lookback,
         horizon=horizon,
         seasonal_period=seasonal_period,
@@ -318,6 +374,17 @@ def build_anchor_library(
         clusters=build_anchor_clusters(cases, distance_weights=weights),
         expert_specs=expert_specs,
         distance_weights=weights,
+        coverage=_coverage_metadata(
+            source,
+            origins,
+            lookback,
+            horizon,
+            stride,
+            start_row,
+            end_row,
+            geometry_case_ids=[case.case_id for case in cases],
+            source_path=data_path,
+        ),
     )
 
 
@@ -327,6 +394,304 @@ def _checkpoint_digest(payload: Any) -> str:
             payload, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
     ).hexdigest()
+
+
+def _eligible_anchor_windows(
+    source, lookback, horizon, stride, start_row, end_row, max_windows
+):
+    for name, value, minimum in (("lookback", lookback, 2), ("horizon", horizon, 1)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ValueError(f"{name} must be an integer >= {minimum}")
+    step = horizon if stride is None else stride
+    if isinstance(step, bool) or not isinstance(step, int) or step < 1:
+        raise ValueError("anchor stride must be a positive integer")
+    cutoff = len(source.frame) if end_row is None else end_row
+    if (
+        isinstance(cutoff, bool)
+        or not isinstance(cutoff, int)
+        or not 1 <= cutoff <= len(source.frame)
+    ):
+        raise ValueError(
+            "end_row must be an exclusive row boundary within the source CSV"
+        )
+    first = lookback if start_row is None else start_row
+    if isinstance(first, bool) or not isinstance(first, int) or first < 0:
+        raise ValueError(
+            "start_row must be an inclusive nonnegative target-origin boundary"
+        )
+    first = max(lookback, first)
+    first = lookback + ((first - lookback + step - 1) // step) * step
+    origins = list(range(first, cutoff - horizon + 1, step))
+    if max_windows is not None:
+        if (
+            isinstance(max_windows, bool)
+            or not isinstance(max_windows, int)
+            or max_windows < 1
+        ):
+            raise ValueError("max_windows must be a positive integer")
+        origins = _sample_origins(origins, max_windows)
+    return (
+        DatasetView(
+            source.frame.iloc[:cutoff].copy(), source.target_col, source.timestamp_col
+        ),
+        origins,
+    )
+
+
+def _sample_origins(origins, count):
+    if len(origins) <= count:
+        return list(origins)
+    if count == 1:
+        return [origins[(len(origins) - 1) // 2]]
+    indices = np.rint(np.linspace(0, len(origins) - 1, count)).astype(int)
+    return [origins[int(index)] for index in indices]
+
+
+def _window_at(dataset, origin, lookback, horizon):
+    return TimeSeriesWindow(
+        dataset.frame.iloc[origin - lookback : origin].copy(),
+        dataset.frame.iloc[origin : origin + horizon].copy(),
+        dataset.target_col,
+        dataset.timestamp_col,
+    )
+
+
+def _validate_expert_fit_cutoffs(specs, first_origin, data_path):
+    from backends.catalog import file_sha256
+
+    source_hash = None
+    for spec in specs:
+        cutoff = spec.get("fit_end_row")
+        if cutoff is None:
+            continue
+        if (
+            isinstance(cutoff, bool)
+            or not isinstance(cutoff, int)
+            or cutoff < 1
+            or first_origin < cutoff
+        ):
+            raise ValueError(
+                f"expert {spec['name']!r} requires all case target origins after its fit_end_row"
+            )
+        expected = spec.get("source_sha256")
+        if expected:
+            source_hash = source_hash or file_sha256(data_path)
+            if expected != source_hash:
+                raise ValueError(
+                    f"expert {spec['name']!r} was fitted on a different source CSV"
+                )
+
+
+def _coverage_metadata(
+    source,
+    origins,
+    lookback,
+    horizon,
+    stride,
+    start_row,
+    end_row,
+    *,
+    geometry_case_ids,
+    source_path=None,
+):
+    from backends.catalog import file_sha256
+
+    timestamp = source.timestamp_col
+    intervals = [
+        {
+            "target_start_row": origin,
+            "target_end_row": origin + horizon,
+            "history_start_row": origin - lookback,
+            "target_start_timestamp": (
+                str(source.frame[timestamp].iloc[origin]) if timestamp else None
+            ),
+            "target_end_timestamp": (
+                str(source.frame[timestamp].iloc[origin + horizon - 1])
+                if timestamp
+                else None
+            ),
+        }
+        for origin in origins
+    ]
+    cutoff = len(source.frame) if end_row is None else end_row
+    return {
+        "sampling": "uniform_eligible_origins_midpoint_if_one",
+        "stride": horizon if stride is None else stride,
+        "eligible_target_start_row": max(
+            lookback, lookback if start_row is None else start_row
+        ),
+        "eligible_target_end_row_exclusive": cutoff,
+        "source_rows": len(source.frame),
+        "source_sha256": file_sha256(source_path) if source_path else None,
+        "geometry_end_row_exclusive": cutoff,
+        "geometry_case_ids": list(geometry_case_ids),
+        "actual_target_intervals": intervals,
+        "actual_target_start_row": min(origins) if origins else None,
+        "actual_target_end_row_exclusive": max(origins) + horizon if origins else None,
+    }
+
+
+def expert_families(library: AnchorLibrary) -> dict[str, str]:
+    families = {}
+    for spec in library.expert_specs:
+        family = spec.get("family", spec["name"])
+        if not isinstance(family, str) or not family.strip():
+            raise ValueError("expert family names must be nonempty strings")
+        families[spec["name"]] = family
+    for cluster in library.clusters:
+        for name in cluster.model_errors:
+            families.setdefault(name, name)
+    return families
+
+
+def assign_library_cluster(library: AnchorLibrary, history: Any) -> int:
+    values = finite_vector(history, "anchor cluster query")
+    if len(values) != library.lookback:
+        raise ValueError("cluster query lookback differs from the fixed geometry")
+    cluster = choose_cluster_by_similarity(
+        library.clusters, values, distance_weights=library.distance_weights
+    )
+    if cluster is None:
+        raise ValueError("fixed anchor geometry has no medoids")
+    return cluster.cluster_id
+
+
+def extend_library_cases(
+    library: AnchorLibrary,
+    data_path: str | Path,
+    *,
+    start_row: int,
+    end_row: int,
+    stride: int | None = None,
+    max_windows: int | None = None,
+    checkpoint_dir: str | Path | None = None,
+    quiet_warnings: bool = False,
+) -> AnchorLibrary:
+    """Extend past reference coverage while preserving geometry and calibrated losses.
+
+    ``max_windows`` is a total case cap, including the preserved geometry cases.
+    Raw losses of new reference cases never replace geometry/calibration loss data.
+    """
+    result = copy.deepcopy(library)
+    source = load_dataset(data_path, library.target_col, library.timestamp_col)
+    dataset, eligible = _eligible_anchor_windows(
+        source, library.lookback, library.horizon, stride, start_row, end_row, None
+    )
+    if any(case.target_start_row is None for case in result.cases):
+        raise ValueError(
+            "reference extension requires a bank with explicit case row boundaries"
+        )
+    from backends.catalog import file_sha256
+
+    if library.coverage.get("source_sha256") not in {None, file_sha256(data_path)}:
+        raise ValueError("reference extension source differs from the geometry source")
+    existing = {case.target_start_row for case in result.cases}
+    additions = [origin for origin in eligible if origin not in existing]
+    if max_windows is not None:
+        if (
+            isinstance(max_windows, bool)
+            or not isinstance(max_windows, int)
+            or max_windows < len(result.cases)
+        ):
+            raise ValueError(
+                "total reference case cap must accommodate all preserved geometry cases"
+            )
+        room = max_windows - len(result.cases)
+        if additions and room == 0:
+            raise ValueError(
+                "total case cap leaves no room for later reference coverage"
+            )
+        additions = _sample_origins(additions, room) if room else []
+    if additions:
+        _validate_expert_fit_cutoffs(result.expert_specs, additions[0], data_path)
+    checkpoints, identity = _prepare_case_checkpoints(
+        checkpoint_dir,
+        dataset,
+        library.lookback,
+        library.horizon,
+        library.seasonal_period,
+        library.dataset_name,
+        stride,
+        max_windows,
+        result.expert_specs,
+        library.distance_weights,
+        additions,
+    )
+    next_id = max(case.case_id for case in result.cases) + 1
+    for index, origin in enumerate(additions):
+        window = _window_at(dataset, origin, library.lookback, library.horizon)
+        path = (
+            checkpoints / f"case_{index:08d}.json" if checkpoints is not None else None
+        )
+        if path is not None and path.exists():
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            payload = stored.get("payload") if isinstance(stored, dict) else None
+            if (
+                not isinstance(payload, dict)
+                or stored.get("sha256") != _checkpoint_digest(payload)
+                or payload.get("identity") != identity
+            ):
+                raise ValueError("reference case checkpoint is corrupt or incompatible")
+            case = anchor_case_from_dict(payload["case"])
+            if (
+                case.target_start_row != origin
+                or case.target_future != window.target_future.astype(float).tolist()
+                or case.target_history != window.target_history.astype(float).tolist()
+            ):
+                raise ValueError(
+                    "reference case checkpoint has incompatible source rows"
+                )
+        else:
+            case = build_anchor_case(
+                index,
+                window,
+                library.seasonal_period,
+                dataset_name=library.dataset_name,
+                quiet_warnings=quiet_warnings,
+                expert_specs=result.expert_specs,
+            )
+            case.history_start_row, case.target_start_row, case.target_end_row = (
+                origin - library.lookback,
+                origin,
+                origin + library.horizon,
+            )
+            if path is not None:
+                payload = {"identity": identity, "case": asdict(case)}
+                write_json(
+                    path, {"payload": payload, "sha256": _checkpoint_digest(payload)}
+                )
+        case.case_id = next_id + index
+        result.cases.append(case)
+    geometry_ids = list(
+        library.coverage.get(
+            "geometry_case_ids", [case.case_id for case in library.cases]
+        )
+    )
+    result.coverage = _coverage_metadata(
+        source,
+        sorted(case.target_start_row for case in result.cases),
+        library.lookback,
+        library.horizon,
+        stride,
+        min(library.coverage.get("eligible_target_start_row", start_row), start_row),
+        end_row,
+        geometry_case_ids=geometry_ids,
+        source_path=data_path,
+    )
+    result.coverage["geometry_end_row_exclusive"] = library.coverage[
+        "geometry_end_row_exclusive"
+    ]
+    result.coverage["sampling"] = "preserved_geometry_plus_uniform_later_references"
+    result.coverage["reference_cases_added"] = len(additions)
+    result.coverage["geometry_and_calibration_losses_unchanged"] = True
+    for cluster in result.clusters:
+        cluster.reference_case_ids = [
+            case.case_id
+            for case in result.cases
+            if assign_library_cluster(result, case.target_history) == cluster.cluster_id
+        ]
+    result.version = "3"
+    return result
 
 
 def _prepare_case_checkpoints(
@@ -340,6 +705,7 @@ def _prepare_case_checkpoints(
     max_windows,
     expert_specs,
     distance_weights,
+    origins,
 ):
     if directory is None:
         return None, None
@@ -363,6 +729,7 @@ def _prepare_case_checkpoints(
         "max_windows": max_windows,
         "expert_specs": expert_specs,
         "distance_weights": list(distance_weights),
+        "target_origins": origins,
         "implementation": {
             Path(path).name: catalog.file_sha256(path)
             for path in (__file__, experts.__file__, models.__file__)
@@ -461,6 +828,9 @@ def anchor_case_from_dict(payload: dict[str, Any]) -> AnchorCase:
         best_model=str(payload["best_model"]),
         model_errors={str(k): float(v) for k, v in errors.items()},
         model_failures=dict(payload.get("model_failures", {})),
+        history_start_row=payload.get("history_start_row"),
+        target_start_row=payload.get("target_start_row"),
+        target_end_row=payload.get("target_end_row"),
     )
 
 
@@ -500,9 +870,9 @@ def build_anchor_case(
     best_model = min(errors, key=errors.get)
     return AnchorCase(
         case_id=case_id,
-        target_history=round_list(history),
-        target_future=round_list(future),
-        window=round_list(zscore(history)),
+        target_history=np.asarray(history, dtype=float).tolist(),
+        target_future=np.asarray(future, dtype=float).tolist(),
+        window=zscore(history).tolist(),
         best_model=best_model,
         model_errors={name: float(value) for name, value in errors.items()},
         model_failures=failures,
@@ -609,6 +979,14 @@ def anchor_forecast_from_library(
     timestamps: Any = None,
 ) -> dict[str, Any]:
     history = finite_vector(history, "anchor query")
+    if library.promotion:
+        from anchorer.policies import (
+            validate_promotion_metadata,
+            validate_promotion_query,
+        )
+
+        validate_promotion_metadata(library)
+        validate_promotion_query(library, timestamps)
     if not library.cases:
         raise ValueError("anchor library has no cases")
     if (
@@ -625,7 +1003,10 @@ def anchor_forecast_from_library(
     if cluster is None:
         raise ValueError("anchor library has no medoid clusters")
     validate_model_errors(cluster.model_errors)
-    selected_names = sorted(cluster.model_errors)
+    effective_losses = (
+        cluster.weighting_losses if cluster.weighting_losses else cluster.model_errors
+    )
+    selected_names = sorted(effective_losses)
     if library.expert_specs:
         current_forecasts, failures = forecast_expert_specs(
             library.expert_specs,
@@ -655,21 +1036,58 @@ def anchor_forecast_from_library(
         arr = finite_vector(values, f"expert {name!r}")
         if len(arr) != horizon:
             raise ValueError(f"expert {name!r} returned an incorrect forecast horizon")
-    weights = historical_loss_weights(cluster.model_errors)
+    weights = historical_loss_weights(effective_losses)
     baseline = np.zeros(horizon, dtype=float)
     for name, weight in weights.items():
         if name in current_forecasts:
             baseline += weight * current_forecasts[name]
 
     return {
-        "ensemble_forecast_baseline": round_list(baseline),
-        "reference_prediction": round_list(baseline),
+        "ensemble_forecast_baseline": baseline.tolist(),
+        **(
+            {
+                "policy_selection": {
+                    key: copy.deepcopy(library.promotion[key])
+                    for key in (
+                        "status",
+                        "candidate_policy",
+                        "selected_expert",
+                        "selection_scope",
+                        "promotion_start_row",
+                        "promotion_labels_used_for_policy_selection",
+                        "loss_fitting_used_promotion_labels",
+                        "independent_quality_verified",
+                    )
+                }
+            }
+            if library.promotion
+            else {}
+        ),
+        "reference_prediction": baseline.tolist(),
         "component_forecasts": {
-            name: round_list(values) for name, values in current_forecasts.items()
+            name: np.asarray(values, dtype=float).tolist()
+            for name, values in current_forecasts.items()
         },
         "weights": {name: float(value) for name, value in weights.items()},
         "weighting": "historical_loss_softmax",
         "historical_losses": dict(cluster.model_errors),
+        "weighting_losses": dict(effective_losses),
+        "loss_calibration": {
+            key: copy.deepcopy(library.calibration[key])
+            for key in (
+                "method",
+                "policy",
+                "temperature",
+                "shrinkage",
+                "active_family_limit",
+                "incumbent_name",
+                "normalization_scale",
+                "normalize_losses",
+                "calibration_end_row",
+                "prequential_mae_guard_passed",
+            )
+            if key in library.calibration
+        },
         "best_model": {
             name: cluster.best_model.get(name, 0) for name in selected_names
         },

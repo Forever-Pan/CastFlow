@@ -61,6 +61,12 @@ def _main(argv: list[str] | None = None) -> int:
         "--models", default=None, help="comma-separated expert names; see --list-models"
     )
     initialize.add_argument(
+        "--expert-preset",
+        choices=["native", "balanced"],
+        default=None,
+        help="native: four CPU statistical experts; balanced: statistical, Ridge, DLinear and Chronos-Bolt experts; mutually exclusive with --models",
+    )
+    initialize.add_argument(
         "--list-models",
         action="store_true",
         help="show selectable experts without preparing files or calling APIs",
@@ -73,12 +79,34 @@ def _main(argv: list[str] | None = None) -> int:
     initialize.add_argument(
         "--tuning-rounds",
         type=int,
-        default=24,
+        default=64,
         help="distinct parameter candidates per expert, up to 256; finite spaces may exhaust earlier",
     )
-    initialize.add_argument("--tuning-windows", type=int, default=12)
-    initialize.add_argument("--confirmation-windows", type=int, default=12)
+    initialize.add_argument("--tuning-windows", type=int, default=24)
+    initialize.add_argument("--calibration-windows", type=int, default=24)
+    initialize.add_argument("--confirmation-windows", type=int, default=24)
+    initialize.add_argument("--min-calibration-windows", type=int, default=4)
     initialize.add_argument("--min-confirmation-windows", type=int, default=4)
+    initialize.add_argument(
+        "--retain-variants",
+        type=int,
+        default=3,
+        help="maximum prediction-distinct tuned variants per family, in addition to a valid original default",
+    )
+    initialize.add_argument(
+        "--loss-mode", choices=["normalized", "raw"], default="normalized"
+    )
+    initialize.add_argument("--fit-fraction", type=float, default=0.60)
+    initialize.add_argument("--selection-start-fraction", type=float, default=None)
+    initialize.add_argument("--calibration-start-fraction", type=float, default=None)
+    initialize.add_argument("--confirmation-start-fraction", type=float, default=None)
+    initialize.add_argument(
+        "--model-device",
+        default="cpu",
+        help="explicit prepared expert device, e.g. cpu or cuda:0",
+    )
+    initialize.add_argument("--dlinear-epochs", type=int, default=20)
+    initialize.add_argument("--dlinear-variants", type=int, default=3)
     initialize.add_argument(
         "--quality-policy",
         choices=["required", "report"],
@@ -92,14 +120,25 @@ def _main(argv: list[str] | None = None) -> int:
         help="required relative MSE improvement over the fixed seasonal baseline",
     )
     initialize.add_argument("--max-mae-regression", type=float, default=0.0)
-    initialize.add_argument("--validation-fraction", type=float, default=0.2)
+    initialize.add_argument(
+        "--promotion-policy",
+        choices=["none", "conservative"],
+        default="none",
+        help="optionally select a pre-frozen global policy on training-side promotion validation; this is not independent quality verification",
+    )
+    initialize.add_argument(
+        "--validation-fraction",
+        type=float,
+        default=None,
+        help="legacy tail boundary; cannot be mixed with explicit stage fractions",
+    )
     initialize.add_argument("--seed", type=int, default=0)
     initialize.add_argument("--stride", type=int, default=None)
     initialize.add_argument(
         "--max-windows",
         type=int,
         default=None,
-        help="bound windows per preparation stage",
+        help="cap stored anchor cases and experience windows; scoring stages have separate window caps",
     )
     initialize.add_argument("--parallel-plan-k", type=int, default=None)
     initialize.add_argument(
@@ -451,12 +490,22 @@ def _main(argv: list[str] | None = None) -> int:
             parser.error(f"--{name.replace('_', '-')} must be positive")
 
     if args.command == "initialize":
-        from anchorer.initialize import initialize_case_libraries
-        from backends.catalog import list_model_catalog
+        from anchorer.initialize import (
+            initialize_case_libraries,
+            preflight_case_library_inputs,
+        )
+        from backends.catalog import BALANCED_MODELS, list_model_catalog
 
         if args.list_models:
             print(json.dumps(list_model_catalog(), indent=2))
             return 0
+        if args.models is not None and args.expert_preset is not None:
+            raise ValueError("--models and --expert-preset are mutually exclusive")
+        models = (
+            [item.strip() for item in args.models.split(",")]
+            if args.models is not None
+            else list(BALANCED_MODELS) if args.expert_preset == "balanced" else None
+        )
         specs = initialization_datasets(args)
         config = config_from_args(args)
         if not args.anchors_only and not config.api_ready():
@@ -485,36 +534,57 @@ def _main(argv: list[str] | None = None) -> int:
             raise ValueError(
                 "future auxiliary forecasts are used by Experience Memory exploration; remove --anchors-only to initialize that stage"
             )
-        if not args.anchors_only:
-            from workflow.initialize import preflight_experience_inputs
-
-            preflight_experience_inputs(specs, config, max_windows=args.max_windows)
-        result = initialize_case_libraries(
-            specs,
-            args.output_root,
-            args.model_store,
-            models=(
-                None
-                if args.models is None
-                else [item.strip() for item in args.models.split(",")]
-            ),
+        preparation = dict(
+            models=models,
             tuning_rounds=args.tuning_rounds,
             tuning_windows=args.tuning_windows,
+            calibration_windows=args.calibration_windows,
             confirmation_windows=args.confirmation_windows,
+            min_calibration_windows=args.min_calibration_windows,
             min_confirmation_windows=args.min_confirmation_windows,
+            retain_variants=args.retain_variants,
+            loss_mode=args.loss_mode,
+            fit_fraction=args.fit_fraction,
+            selection_start_fraction=args.selection_start_fraction,
+            calibration_start_fraction=args.calibration_start_fraction,
+            confirmation_start_fraction=args.confirmation_start_fraction,
+            model_device=args.model_device,
+            dlinear_epochs=args.dlinear_epochs,
+            dlinear_variants=args.dlinear_variants,
             quality_policy=args.quality_policy,
+            promotion_policy=args.promotion_policy,
             min_mse_improvement=args.min_mse_improvement,
             max_mae_regression=args.max_mae_regression,
             validation_fraction=args.validation_fraction,
             seed=args.seed,
             download_models=args.download_models,
             max_windows=args.max_windows,
-            resume=args.resume,
         )
+        planned = preflight_case_library_inputs(
+            specs,
+            model_store=args.model_store,
+            **preparation,
+        )
+        if not args.anchors_only:
+            from workflow.initialize import preflight_experience_inputs
+
+            preflight_experience_inputs(
+                specs,
+                config,
+                max_windows=args.max_windows,
+                window_bounds=planned["memory_bounds"],
+            )
+        result = initialize_case_libraries(
+            specs,
+            args.output_root,
+            args.model_store,
+            resume=args.resume,
+            **preparation,
+        )
+        cases = result
         if not args.anchors_only:
             from workflow.initialize import initialize_experience_memories
 
-            cases = result
             result = initialize_experience_memories(
                 specs,
                 cases,
@@ -524,13 +594,8 @@ def _main(argv: list[str] | None = None) -> int:
                 show_progress=not args.no_progress,
                 verbose_samples=args.verbose_samples,
             )
-            result["quality_policy"] = cases.get("quality_policy", args.quality_policy)
-            result["quality_passed"] = cases.get("quality_passed", False)
-            result["anchor_quality"] = {
-                name: info.get("quality", {})
-                for name, info in cases["datasets"].items()
-            }
-        print(json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False))
+        summary = _initialization_summary(cases, None if args.anchors_only else result)
+        print(json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False))
         return 0
 
     if args.command == "build-memory":
@@ -856,6 +921,152 @@ def _main(argv: list[str] | None = None) -> int:
 
     parser.error(f"unknown command: {args.command}")
     return 2
+
+
+def _initialization_summary(cases: dict, memory: dict | None = None) -> dict:
+    """Project console output; full diagnostics stay in the saved JSON artifacts."""
+    source = memory if memory is not None else cases
+    keys = (
+        "status",
+        "fingerprint",
+        "output_dir",
+        "experience_memory",
+        "sha256",
+        "entries",
+        "scope",
+        "inference_specialist_configured",
+        "promotion_policy",
+        "independent_quality_verified",
+    )
+    result = {key: source[key] for key in keys if key in source}
+    result.update(
+        {
+            key: cases[key]
+            for key in (
+                "model_store",
+                "quality_policy",
+                "quality_passed",
+                "quality_scope",
+                "promotion_policy",
+                "independent_quality_verified",
+            )
+            if key in cases
+        }
+    )
+    if memory is not None:
+        result["case_initialization_fingerprint"] = cases.get("fingerprint")
+        result["case_initialization_output_dir"] = cases.get("output_dir")
+        result["anchor_quality"] = {
+            name: info.get("quality", {}) for name, info in cases["datasets"].items()
+        }
+    datasets = {}
+    for name, info in cases["datasets"].items():
+        entry = {
+            key: info[key]
+            for key in (
+                "anchor_library",
+                "expert_manifest",
+                "case_count",
+                "cluster_count",
+                "quality_passed",
+                "quality_report",
+                "quality",
+                "prepared_anchor_library",
+                "prepared_quality_report",
+                "artifact_role",
+                "prepared_anchor_library_sha256",
+                "anchor_library_sha256",
+                "memory_anchor_library",
+                "memory_anchor_library_sha256",
+                "independent_quality_verified",
+            )
+            if key in info
+        }
+        selection = []
+        retained = []
+        for family in info.get("selection", []):
+            selection.append(
+                {
+                    key: family[key]
+                    for key in (
+                        "family",
+                        "model",
+                        "requested_trials",
+                        "available_trials",
+                        "attempted_trials",
+                        "successful_trials",
+                        "failed_trials",
+                        "pool_exhausted",
+                        "validation_windows",
+                        "retained_count",
+                        "retained_variants",
+                    )
+                    if key in family
+                }
+            )
+            for model in family.get("retained_variants", []):
+                if model not in retained:
+                    retained.append(model)
+        calibration = info.get("calibration", {})
+        if not retained:
+            retained = list(calibration.get("families", {}))
+        entry["retained_models"] = retained
+        entry["selection"] = selection
+        entry["calibration"] = _scalar_fields(calibration)
+        trials = calibration.get("prequential_trials", [])
+        entry["calibration"]["trial_count"] = len(trials)
+        chosen = calibration.get("selected_trial_index")
+        if (
+            isinstance(chosen, int)
+            and not isinstance(chosen, bool)
+            and 0 <= chosen < len(trials)
+        ):
+            entry["calibration"]["selected_trial"] = _scalar_fields(trials[chosen])
+        coverage = info.get("coverage", {})
+        entry["coverage"] = _scalar_fields(coverage)
+        entry["coverage"]["case_count"] = info.get("case_count")
+        entry["coverage"]["geometry_case_count"] = len(
+            coverage.get("geometry_case_ids", [])
+        )
+        intervals = coverage.get("actual_target_intervals", [])
+        if intervals:
+            first = min(intervals, key=lambda interval: interval["target_start_row"])
+            last = max(intervals, key=lambda interval: interval["target_end_row"])
+            entry["coverage"]["first_target_timestamp"] = first.get(
+                "target_start_timestamp"
+            )
+            entry["coverage"]["last_target_timestamp"] = last.get(
+                "target_end_timestamp"
+            )
+        entry["protocol"] = _scalar_fields(info.get("protocol", {}))
+        if "promotion" in info:
+            entry["promotion"] = _scalar_fields(info["promotion"])
+        if memory is not None:
+            record = memory.get("datasets", {}).get(name, {})
+            entry.update(
+                {key: value for key, value in record.items() if key != "anchor_library"}
+            )
+            entry["memory_anchor_library"] = record.get(
+                "memory_anchor_library",
+                record.get(
+                    "anchor_library",
+                    entry.get("memory_anchor_library", entry.get("anchor_library")),
+                ),
+            )
+        datasets[name] = entry
+    result["datasets"] = datasets
+    result["diagnostics"] = (
+        "Complete calibration traces and case intervals are stored in anchor_library and quality_report."
+    )
+    return result
+
+
+def _scalar_fields(value: dict) -> dict:
+    return {
+        key: item
+        for key, item in value.items()
+        if item is None or isinstance(item, (str, int, float, bool))
+    }
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:

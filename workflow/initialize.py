@@ -22,10 +22,9 @@ from utils.io import (
     atomic_write_json,
     attach_covariate_forecasts,
     load_dataset,
-    make_windows,
 )
 from utils.metrics import mae, mse
-from workflow.engine import CastFlow, request_identity
+from workflow.engine import CastFlow, request_identity, bounded_memory_windows
 from workflow.memory import StrategyMemory
 from workflow.recovery import ExecutionJournal, digest
 
@@ -35,6 +34,7 @@ def preflight_experience_inputs(
     config: CastFlowConfig,
     *,
     max_windows: int | None = None,
+    window_bounds: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     """Validate all training/covariate inputs without models, writes, or calls."""
     config.validate()
@@ -56,6 +56,20 @@ def preflight_experience_inputs(
         raise ValueError(
             "dataset_specs must be a nonempty sequence of training dataset objects"
         )
+    if window_bounds is not None and not isinstance(window_bounds, dict):
+        raise ValueError(
+            "window_bounds must map dataset names to target row boundaries"
+        )
+    if window_bounds is not None:
+        names = {
+            raw.get("name")
+            for raw in dataset_specs
+            if isinstance(raw, dict) and isinstance(raw.get("name"), str)
+        }
+        if set(window_bounds) != names:
+            raise ValueError(
+                "window_bounds must cover exactly the specified training datasets"
+            )
     checked, seen = [], set()
     for raw in dataset_specs:
         if not isinstance(raw, dict):
@@ -95,17 +109,33 @@ def preflight_experience_inputs(
             )
         source_hash = file_sha256(source)
         dataset = load_dataset(source, raw.get("target_col"), raw.get("timestamp_col"))
-        windows = make_windows(
+        bounds = window_bounds[name] if window_bounds is not None else {}
+        if not isinstance(bounds, dict) or (
+            window_bounds is not None and set(bounds) != {"start_origin_row", "end_row"}
+        ):
+            raise ValueError(
+                "memory window bounds require exactly start_origin_row and end_row"
+            )
+        if any(
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in bounds.values()
+        ):
+            raise ValueError(
+                "explicit memory window bounds must be integer row boundaries"
+            )
+        source_windows = bounded_memory_windows(
             dataset,
             raw["lookback"],
             raw["horizon"],
             stride=raw.get("memory_stride", raw.get("stride")),
             max_windows=max_windows,
+            **bounds,
         )
-        if not windows:
+        if not source_windows:
             raise ValueError(
                 f"{name}: no complete training windows for memory exploration"
             )
+        source_origins, windows = zip(*source_windows)
         covariate_path = raw.get("covariate_forecasts_path")
         covariate_hash = None
         if not isinstance(
@@ -137,6 +167,8 @@ def preflight_experience_inputs(
                 "name": name,
                 "source_sha256": source_hash,
                 "windows": len(windows),
+                "source_origins": list(source_origins),
+                "window_bounds": bounds,
                 "covariate_forecasts_sha256": covariate_hash,
             }
         )
@@ -160,7 +192,6 @@ def initialize_experience_memories(
     Completed dataset artifacts are checksum-verified and reused as a whole,
     including when some training windows produced no accepted trajectory.
     """
-    preflight_experience_inputs(dataset_specs, config, max_windows=max_windows)
     if not isinstance(resume, bool):
         raise ValueError("resume must be boolean")
     if max_windows is not None and (
@@ -176,6 +207,23 @@ def initialize_experience_memories(
         raise ValueError(
             "case-library initialization must complete before constructing Experience Memory"
         )
+    bounds = {
+        name: {
+            "start_origin_row": info.get("protocol", {}).get(
+                "memory_start_origin_row", specs["lookback"]
+            ),
+            "end_row": info.get("protocol", {}).get(
+                "memory_end_row_exclusive",
+                info.get("protocol", {}).get("confirmation_start_row"),
+            ),
+        }
+        for specs in dataset_specs
+        for name in [specs["name"]]
+        for info in [case_initialization.get("datasets", {}).get(name, {})]
+    }
+    preflight_experience_inputs(
+        dataset_specs, config, max_windows=max_windows, window_bounds=bounds
+    )
     jobs = _preflight(dataset_specs, case_initialization, config, max_windows)
     identity = {
         "schema_version": 1,
@@ -301,8 +349,23 @@ def _preflight(specs, case_initialization, config, max_windows):
             raise ValueError(
                 f"no completed anchor library for training dataset {name!r}"
             )
-        library_path = Path(info["anchor_library"]).expanduser().resolve(strict=True)
+        inference_library_path = (
+            Path(info["anchor_library"]).expanduser().resolve(strict=True)
+        )
+        inference_library_hash = file_sha256(inference_library_path)
+        if (
+            info.get("anchor_library_sha256", inference_library_hash)
+            != inference_library_hash
+        ):
+            raise ValueError(f"{name}: inference library changed")
+        library_path = (
+            Path(info.get("memory_anchor_library", info["anchor_library"]))
+            .expanduser()
+            .resolve(strict=True)
+        )
         library_hash = file_sha256(library_path)
+        if info.get("memory_anchor_library_sha256", library_hash) != library_hash:
+            raise ValueError(f"{name}: prepared training library changed")
         library = AnchorLibrary.load(library_path)
         for key in ("lookback", "horizon", "seasonal_period"):
             if isinstance(raw.get(key), bool) or raw.get(key) != getattr(library, key):
@@ -326,17 +389,25 @@ def _preflight(specs, case_initialization, config, max_windows):
         if file_sha256(source) != source_hash:
             raise ValueError(f"{name}: training data changed during preflight")
         stride = raw.get("memory_stride", raw.get("stride"))
-        windows = make_windows(
+        protocol = info.get("protocol", {})
+        start_origin_row = protocol.get("memory_start_origin_row", library.lookback)
+        end_row = protocol.get(
+            "memory_end_row_exclusive", protocol.get("confirmation_start_row")
+        )
+        source_windows = bounded_memory_windows(
             dataset,
             library.lookback,
             library.horizon,
             stride=stride,
             max_windows=max_windows,
+            start_origin_row=start_origin_row,
+            end_row=end_row,
         )
-        if not windows:
+        if not source_windows:
             raise ValueError(
                 f"{name}: no complete training windows for memory exploration"
             )
+        source_origins, windows = zip(*source_windows)
         covariate_path = raw.get("covariate_forecasts_path")
         covariate_hash = None
         if covariate_path:
@@ -375,11 +446,16 @@ def _preflight(specs, case_initialization, config, max_windows):
             "source_sha256": source_hash,
             "anchor_library": str(library_path),
             "anchor_library_sha256": library_hash,
+            "inference_anchor_library": str(inference_library_path),
+            "inference_anchor_library_sha256": inference_library_hash,
             "covariate_forecasts_path": str(covariate_path) if covariate_path else None,
             "covariate_forecasts_sha256": covariate_hash,
             "covariate_issued_at": raw.get("covariate_issued_at"),
             "covariate_issue_col": raw.get("covariate_issue_col", "issued_at"),
             "stride": stride,
+            "start_origin_row": start_origin_row,
+            "end_row": end_row,
+            "source_origins": list(source_origins),
             "window_count": len(windows),
             "runtime": runtime_identity,
         }
@@ -390,11 +466,15 @@ def _preflight(specs, case_initialization, config, max_windows):
                 "source_hash": source_hash,
                 "library_path": library_path,
                 "library_hash": library_hash,
+                "inference_library_path": inference_library_path,
+                "inference_library_hash": inference_library_hash,
                 "covariate_path": covariate_path,
                 "covariate_hash": covariate_hash,
                 "covariate_issued_at": raw.get("covariate_issued_at"),
                 "covariate_issue_col": raw.get("covariate_issue_col", "issued_at"),
                 "stride": stride,
+                "start_origin_row": start_origin_row,
+                "end_row": end_row,
                 "workflow": workflow,
                 "window": windows[0],
                 "identity": identity,
@@ -411,6 +491,7 @@ def _assert_inputs(job):
     if (
         file_sha256(job["source"]) != job["source_hash"]
         or file_sha256(job["library_path"]) != job["library_hash"]
+        or file_sha256(job["inference_library_path"]) != job["inference_library_hash"]
     ):
         raise ValueError(f"{job['name']}: training source or anchor library changed")
     if (
@@ -442,6 +523,8 @@ def _build_dataset(job, output, max_windows, show_progress, verbose_samples):
         covariate_issued_at=job["covariate_issued_at"],
         covariate_issue_col=job["covariate_issue_col"],
         completion_journal_dir=path.parent / "completed_windows",
+        start_origin_row=job["start_origin_row"],
+        end_row=job["end_row"],
     )
     _validate_entries(memory, job)
     return {
@@ -451,8 +534,13 @@ def _build_dataset(job, output, max_windows, show_progress, verbose_samples):
         "entries": len(memory.entries),
         "training_windows": job["identity"]["window_count"],
         "unretained_windows": job["identity"]["window_count"] - len(memory.entries),
-        "anchor_library": str(job["library_path"]),
+        "anchor_library": str(job["inference_library_path"]),
+        "anchor_library_sha256": job["inference_library_hash"],
+        "memory_anchor_library": str(job["library_path"]),
+        "memory_anchor_library_sha256": job["library_hash"],
         "source_sha256": job["source_hash"],
+        "start_origin_row": job["start_origin_row"],
+        "end_row": job["end_row"],
     }
 
 
@@ -473,6 +561,17 @@ def _validate_entries(memory, job):
                 "Experience Memory contains duplicate training-window identifiers"
             )
         seen.add(entry.get("idx"))
+        index = entry.get("idx")
+        origins = job["identity"]["source_origins"]
+        if (
+            isinstance(index, bool)
+            or not isinstance(index, int)
+            or not 0 <= index < len(origins)
+            or entry.get("source_origin_row") != origins[index]
+        ):
+            raise ValueError(
+                "Experience Memory target origin differs from the bounded training design"
+            )
         if not set(PlanningModule.mandatory_tools).issubset(
             entry.get("tool_schedule", [])
         ):

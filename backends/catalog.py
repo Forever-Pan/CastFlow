@@ -6,7 +6,10 @@ import hashlib
 import copy
 import importlib.util
 import json
+import math
+from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
+from itertools import product
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -197,100 +200,143 @@ def prepare_models(
 
 
 def candidate_parameters(
-    spec: dict[str, Any],
-    *,
-    lookback: int,
-    seasonal_period: int,
-    tuning_rounds: int,
-    seed: int,
+    spec: dict[str, Any], *, lookback: int, seasonal_period: int,
+    tuning_rounds: int, seed: int,
 ) -> list[dict[str, Any]]:
-    """Return deterministic, bounded candidates; their selected parameters are saved verbatim."""
-    kind = spec["kind"]
-    lags = min(12, max(1, lookback // 4))
-    short = max(1, min(lags, lookback - 2))
-    base = dict(spec.get("params", {}))
-    pools: dict[str, list[dict[str, Any]]] = {
-        "seasonal_naive": [
-            {"season_length": seasonal_period},
-            {"season_length": max(1, seasonal_period // 2)},
-            {"season_length": 2 * seasonal_period},
-            {"season_length": 1},
-        ],
-        "historic_average": [
-            {"window": lookback},
-            {"window": min(lookback, seasonal_period)},
-            {"window": max(1, lookback // 2)},
-            {"window": min(lookback, 2 * seasonal_period)},
-        ],
-        "auto_arima": [
-            {"max_p": 2, "max_q": 2, "d_values": [0, 1]},
-            {"max_p": 1, "max_q": 1, "d_values": [0]},
-            {"max_p": 1, "max_q": 1, "d_values": [1]},
-            {"max_p": 3, "max_q": 1, "d_values": [0, 1]},
-        ],
-        "theta": [
-            {"deseasonalize": True, "period": seasonal_period},
-            {"deseasonalize": False, "period": seasonal_period},
-            {"deseasonalize": True, "period": max(1, seasonal_period // 2)},
-        ],
-        "zero": [{}],
-        "ridge": [
-            {"lags": short, "alpha": 1.0},
-            {"lags": short, "alpha": 0.1},
-            {"lags": max(1, short // 2), "alpha": 10.0},
-            {"lags": min(2 * short, lookback - 2), "alpha": 1.0},
-        ],
-        "xgboost": [
-            {
-                "lags": short,
-                "n_estimators": n,
-                "max_depth": d,
-                "learning_rate": lr,
-                "reg_lambda": 1.0,
-                "seed": seed,
-            }
-            for n, d, lr in [
-                (100, 3, 0.05),
-                (50, 2, 0.1),
-                (150, 4, 0.03),
-                (200, 2, 0.05),
-            ]
-        ],
-        "lightgbm": [
-            {
-                "lags": short,
-                "n_estimators": n,
-                "max_depth": d,
-                "learning_rate": lr,
-                "reg_lambda": 1.0,
-                "seed": seed,
-            }
-            for n, d, lr in [
-                (100, 3, 0.05),
-                (50, 2, 0.1),
-                (150, 4, 0.03),
-                (200, 2, 0.05),
-            ]
-        ],
-        "chronos": [
-            dict(base, seed=seed, temperature=t, num_samples=n)
-            for t, n in [(1.0, 20), (0.8, 20), (1.0, 40), (1.2, 20)]
-        ],
-    }
-    candidates = []
-    for params in pools[kind]:
-        if params not in candidates:
-            candidates.append(params)
-    # The default candidate is always first; later rounds use a reproducible order.
+    """Return distinct recipes with an unchanged baseline and stable budget prefixes.
+
+    The budget counts attempted recipes. Finite simple-model spaces stop when
+    exhausted. Stochastic model seeds are held fixed across all candidates.
+    """
+    if isinstance(tuning_rounds, bool) or not isinstance(tuning_rounds, int) or not 1 <= tuning_rounds <= 256:
+        raise ValueError("tuning_rounds must be an integer between 1 and 256")
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError("seed must be a nonnegative integer")
+    space = _candidate_space(spec, lookback, seasonal_period, seed)
     import numpy as np
 
-    if len(candidates) > 2:
-        rng = np.random.default_rng(seed)
-        tail = [
-            candidates[int(i)] for i in rng.permutation(np.arange(1, len(candidates)))
-        ]
-        candidates = candidates[:1] + tail
-    return candidates[:tuning_rounds]
+    result = [dict(space.baseline)]
+    budget = min(tuning_rounds, space.capacity)
+    if budget == 1:
+        return result
+    rng = np.random.default_rng(seed)
+    for index in rng.permutation(space.alternative_count):
+        params = space.alternative(int(index))
+        if space.is_baseline(params):
+            continue
+        result.append(params)
+        if len(result) >= budget:
+            break
+    return result
+
+
+def candidate_capacity(spec: dict[str, Any], *, lookback: int, seasonal_period: int) -> int:
+    """Return the actual finite search-space size before applying a tuning budget."""
+    return _candidate_space(spec, lookback, seasonal_period).capacity
+
+
+@dataclass(slots=True)
+class _CandidateSpace:
+    baseline: dict[str, Any]
+    explicit_alternatives: list[dict[str, Any]] | None = None
+    axes: tuple[tuple[str, tuple[Any, ...]], ...] = ()
+    fixed: dict[str, Any] = field(default_factory=dict)
+    effective_baseline: dict[str, Any] | None = None
+
+    @property
+    def alternative_count(self) -> int:
+        if self.explicit_alternatives is not None:
+            return len(self.explicit_alternatives)
+        return math.prod(len(values) for _, values in self.axes)
+
+    @property
+    def capacity(self) -> int:
+        if self.explicit_alternatives is not None:
+            return 1 + len(self.explicit_alternatives)
+        baseline = self.effective_baseline or self.baseline
+        included = (set(baseline) == set(self.fixed) | {name for name, _ in self.axes}
+                    and all(baseline.get(name) == value for name, value in self.fixed.items())
+                    and all(baseline.get(name) in values for name, values in self.axes))
+        return self.alternative_count + (0 if included else 1)
+
+    def is_baseline(self, params: dict[str, Any]) -> bool:
+        return params == (self.effective_baseline or self.baseline)
+
+    def alternative(self, index: int) -> dict[str, Any]:
+        if self.explicit_alternatives is not None:
+            return dict(self.explicit_alternatives[index])
+        params = dict(self.fixed)
+        for name, values in reversed(self.axes):
+            index, digit = divmod(index, len(values))
+            params[name] = values[digit]
+        return params
+
+
+def _candidate_space(spec: dict[str, Any], lookback: int, seasonal_period: int, seed: int = 0) -> _CandidateSpace:
+    for name, value, minimum in (("lookback", lookback, 2), ("seasonal_period", seasonal_period, 1)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise ValueError(f"{name} must be an integer >= {minimum}")
+    kind = spec["kind"]
+    if kind == "seasonal_naive":
+        baseline = {"season_length": seasonal_period}
+        return _CandidateSpace(baseline, [{"season_length": period} for period in range(1, lookback+1)
+                                          if period != min(seasonal_period, lookback)])
+    if kind == "historic_average":
+        return _CandidateSpace({"window": lookback}, axes=(("window", tuple(range(1, lookback+1))),))
+    if kind == "zero":
+        return _CandidateSpace({}, [])
+    if kind == "theta":
+        baseline = {"deseasonalize": True, "period": seasonal_period}
+        baseline_period = seasonal_period if 1 < seasonal_period <= lookback//2 else None
+        alternatives = []
+        if baseline_period is not None:
+            alternatives.append({"deseasonalize": False, "period": seasonal_period})
+        alternatives.extend({"deseasonalize": True, "period": period} for period in range(2, lookback//2+1)
+                            if period != baseline_period)
+        return _CandidateSpace(baseline, alternatives)
+    if kind == "auto_arima":
+        baseline = {"max_p": 2, "max_q": 2, "d_values": [0, 1]}
+        if lookback < 4:
+            raise ValueError("AutoARIMA requires lookback >= 4")
+        difference_sets = ((0,), (1,), (2,), (0, 1), (0, 2), (1, 2), (0, 1, 2))
+
+        def orders(params):
+            return tuple((p, d, q) for p in range(params["max_p"]+1) for d in params["d_values"]
+                         for q in range(params["max_q"]+1) if lookback > p+d+q+3)
+
+        seen = {orders(baseline)}
+        alternatives = []
+        for p, q, differences in product(range(6), range(6), difference_sets):
+            params = {"max_p": p, "max_q": q, "d_values": list(differences)}
+            feasible = orders(params)
+            if feasible and feasible not in seen:
+                seen.add(feasible)
+                alternatives.append(params)
+        return _CandidateSpace(baseline, alternatives)
+    if kind in {"ridge", "xgboost", "lightgbm"}:
+        if lookback < 3:
+            raise ValueError("autoregressive expert tuning requires lookback >= 3")
+        short = min(12, max(1, lookback//4))
+        cap = min(128, lookback-2, max(1, lookback//2))
+        values = set(range(1, min(32, cap)+1))
+        values.update(min(cap, max(1, value)) for value in (short, seasonal_period//2, seasonal_period, 2*seasonal_period, lookback//3, cap))
+        lags = tuple(sorted(values))
+        if kind == "ridge":
+            levels = (0.0, 1e-6, 1e-5, 1e-4, .001, .01, .03, .1, .3, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1000.0, 3000.0, 10000.0)
+            return _CandidateSpace({"lags": short, "alpha": 1.0}, axes=(("lags", lags), ("alpha", levels)))
+        baseline = {"lags": short, "n_estimators": 100, "max_depth": 3, "learning_rate": .05, "reg_lambda": 1.0, "seed": seed}
+        return _CandidateSpace(baseline, axes=(("lags", lags), ("n_estimators", (25, 50, 100, 200, 400)),
+                                               ("max_depth", (1, 2, 3, 4, 6)), ("learning_rate", (.02, .05, .1, .2)),
+                                               ("reg_lambda", (0.0, .1, 1.0, 10.0, 100.0))), fixed={"seed": seed})
+    if kind == "chronos":
+        base = dict(spec.get("params", {}))
+        baseline = dict(base, seed=seed, temperature=1.0, num_samples=20)
+        effective = {"top_k": 50, "top_p": 1.0, **baseline}
+        return _CandidateSpace(baseline, axes=(("num_samples", (10, 20, 40, 80)),
+                                               ("temperature", (.5, .7, .9, 1.0, 1.1, 1.3)),
+                                               ("top_k", (20, 50, 100)), ("top_p", (.8, .9, .95, 1.0))),
+                               fixed={"seed": seed}, effective_baseline=effective)
+    raise ValueError(f"unsupported expert tuning kind: {kind!r}")
 
 
 def chronos_assets(folder: Path) -> dict[str, str]:

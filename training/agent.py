@@ -98,13 +98,13 @@ class LiteAgent(agl.LitAgent[dict[str, Any]]):
                 (str(task.get("dataset_name", "")) + "\n" + prompt).encode()
             ).hexdigest()[:20]
             attempt_id = hashlib.sha256(
-                f"{attempt.rollout_id}:{attempt.attempt.attempt.attempt_id}".encode()
+                f"{attempt.rollout_id}:{attempt.attempt.attempt_id}".encode()
             ).hexdigest()[:24]
             atomic_write_json(
                 self.rollout_output_dir / task_id / f"{attempt_id}.json",
                 {
                     "rollout_id": attempt.rollout_id,
-                    "attempt_id": attempt.attempt.attempt.attempt_id,
+                    "attempt_id": attempt.attempt.attempt_id,
                     "prompt": prompt,
                     "answer": answer,
                     "ground_truth": truth,

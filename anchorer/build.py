@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import warnings
 from collections import Counter
 from collections.abc import Iterator, Sequence
@@ -10,7 +11,7 @@ from typing import Any, TypeVar
 
 import numpy as np
 
-from utils.io import load_dataset, make_windows
+from utils.io import DatasetView, load_dataset, make_windows
 from utils.schema import TimeSeriesWindow
 from anchorer.models import forecast_with_anchorer_models
 from utils.metrics import mse
@@ -218,10 +219,26 @@ def build_anchor_library(
     quiet_warnings: bool = False,
     expert_manifest: str | Path | None = None,
     distance_weights: tuple[float, float, float] = (1 / 3, 1 / 3, 1 / 3),
+    end_row: int | None = None,
+    checkpoint_dir: str | Path | None = None,
 ) -> AnchorLibrary:
     weights = normalize_distance_weights(distance_weights)
     expert_specs = load_expert_manifest(expert_manifest)
     dataset = load_dataset(data_path, target_col, timestamp_col)
+    if end_row is not None:
+        if (
+            isinstance(end_row, bool)
+            or not isinstance(end_row, int)
+            or not 1 <= end_row <= len(dataset.frame)
+        ):
+            raise ValueError(
+                "end_row must be an exclusive row boundary within the source CSV"
+            )
+        dataset = DatasetView(
+            dataset.frame.iloc[:end_row].copy(),
+            dataset.target_col,
+            dataset.timestamp_col,
+        )
     windows = make_windows(
         dataset,
         lookback=lookback,
@@ -234,24 +251,60 @@ def build_anchor_library(
             "no anchor cases could be built; check lookback/horizon against dataset length"
         )
 
-    cases = [
-        build_anchor_case(
-            idx,
-            window,
-            seasonal_period,
-            dataset_name=dataset_name,
-            quiet_warnings=quiet_warnings,
-            expert_specs=expert_specs,
+    checkpoints, checkpoint_identity = _prepare_case_checkpoints(
+        checkpoint_dir,
+        dataset,
+        lookback,
+        horizon,
+        seasonal_period,
+        dataset_name,
+        stride,
+        max_windows,
+        expert_specs,
+        weights,
+    )
+    cases = []
+    for idx, window in enumerate(
+        progress_iter(
+            windows, label="Building anchor cases", unit="case", enabled=show_progress
         )
-        for idx, window in enumerate(
-            progress_iter(
-                windows,
-                label="Building anchor cases",
-                unit="case",
-                enabled=show_progress,
+    ):
+        path = checkpoints / f"case_{idx:08d}.json" if checkpoints is not None else None
+        if path is not None and path.exists():
+            record = json.loads(path.read_text(encoding="utf-8"))
+            payload = record.get("payload") if isinstance(record, dict) else None
+            if (
+                not isinstance(payload, dict)
+                or record.get("sha256") != _checkpoint_digest(payload)
+                or payload.get("identity") != checkpoint_identity
+            ):
+                raise ValueError(
+                    f"anchor case checkpoint is corrupt or incompatible: {path}"
+                )
+            case = anchor_case_from_dict(payload["case"])
+            if (
+                case.case_id != idx
+                or case.target_history != round_list(window.target_history)
+                or case.target_future != round_list(window.target_future)
+            ):
+                raise ValueError(
+                    f"anchor case checkpoint does not match its source window: {path}"
+                )
+        else:
+            case = build_anchor_case(
+                idx,
+                window,
+                seasonal_period,
+                dataset_name=dataset_name,
+                quiet_warnings=quiet_warnings,
+                expert_specs=expert_specs,
             )
-        )
-    ]
+            if path is not None:
+                payload = {"identity": checkpoint_identity, "case": asdict(case)}
+                write_json(
+                    path, {"payload": payload, "sha256": _checkpoint_digest(payload)}
+                )
+        cases.append(case)
     return AnchorLibrary(
         version="2",
         lookback=lookback,
@@ -266,6 +319,66 @@ def build_anchor_library(
         expert_specs=expert_specs,
         distance_weights=weights,
     )
+
+
+def _checkpoint_digest(payload: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _prepare_case_checkpoints(
+    directory,
+    dataset,
+    lookback,
+    horizon,
+    seasonal_period,
+    dataset_name,
+    stride,
+    max_windows,
+    expert_specs,
+    distance_weights,
+):
+    if directory is None:
+        return None, None
+    from backends import experts, catalog
+    from anchorer import models
+    import pandas as pd
+
+    frame_hash = hashlib.sha256(
+        pd.util.hash_pandas_object(dataset.frame, index=False).to_numpy().tobytes()
+    ).hexdigest()
+    identity = {
+        "prefix_sha256": frame_hash,
+        "prefix_rows": len(dataset.frame),
+        "lookback": lookback,
+        "horizon": horizon,
+        "seasonal_period": seasonal_period,
+        "dataset_name": dataset_name,
+        "target_col": dataset.target_col,
+        "timestamp_col": dataset.timestamp_col,
+        "stride": stride,
+        "max_windows": max_windows,
+        "expert_specs": expert_specs,
+        "distance_weights": list(distance_weights),
+        "implementation": {
+            Path(path).name: catalog.file_sha256(path)
+            for path in (__file__, experts.__file__, models.__file__)
+        },
+    }
+    fingerprint = _checkpoint_digest(identity)
+    output = Path(directory) / fingerprint
+    output.mkdir(parents=True, exist_ok=True)
+    identity_path = output / "identity.json"
+    if (
+        identity_path.exists()
+        and json.loads(identity_path.read_text(encoding="utf-8")) != identity
+    ):
+        raise ValueError("anchor case checkpoint identity changed")
+    write_json(identity_path, identity)
+    return output, fingerprint
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -917,9 +1030,10 @@ def combined_distance(
 
 
 def dtw_distance(left: np.ndarray, right: np.ndarray) -> float:
-    a, b = np.ascontiguousarray(
-        finite_vector(left, "DTW input"), dtype=np.double
-    ), np.ascontiguousarray(finite_vector(right, "DTW input"), dtype=np.double)
+    a, b = (
+        np.ascontiguousarray(finite_vector(left, "DTW input"), dtype=np.double),
+        np.ascontiguousarray(finite_vector(right, "DTW input"), dtype=np.double),
+    )
     if np.array_equal(a, b):
         return 0.0
     try:

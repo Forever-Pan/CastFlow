@@ -70,7 +70,28 @@ def _main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="allow downloading selected missing pretrained expert weights",
     )
-    initialize.add_argument("--tuning-rounds", type=int, default=3)
+    initialize.add_argument(
+        "--tuning-rounds",
+        type=int,
+        default=24,
+        help="distinct parameter candidates per expert, up to 256; finite spaces may exhaust earlier",
+    )
+    initialize.add_argument("--tuning-windows", type=int, default=12)
+    initialize.add_argument("--confirmation-windows", type=int, default=12)
+    initialize.add_argument("--min-confirmation-windows", type=int, default=4)
+    initialize.add_argument(
+        "--quality-policy",
+        choices=["required", "report"],
+        default="required",
+        help="require held-out prior quality before building experience memory, or explicitly prepare a diagnostic bundle",
+    )
+    initialize.add_argument(
+        "--min-mse-improvement",
+        type=float,
+        default=0.01,
+        help="required relative MSE improvement over the fixed seasonal baseline",
+    )
+    initialize.add_argument("--max-mae-regression", type=float, default=0.0)
     initialize.add_argument("--validation-fraction", type=float, default=0.2)
     initialize.add_argument("--seed", type=int, default=0)
     initialize.add_argument("--stride", type=int, default=None)
@@ -478,6 +499,12 @@ def _main(argv: list[str] | None = None) -> int:
                 else [item.strip() for item in args.models.split(",")]
             ),
             tuning_rounds=args.tuning_rounds,
+            tuning_windows=args.tuning_windows,
+            confirmation_windows=args.confirmation_windows,
+            min_confirmation_windows=args.min_confirmation_windows,
+            quality_policy=args.quality_policy,
+            min_mse_improvement=args.min_mse_improvement,
+            max_mae_regression=args.max_mae_regression,
             validation_fraction=args.validation_fraction,
             seed=args.seed,
             download_models=args.download_models,
@@ -487,15 +514,22 @@ def _main(argv: list[str] | None = None) -> int:
         if not args.anchors_only:
             from workflow.initialize import initialize_experience_memories
 
+            cases = result
             result = initialize_experience_memories(
                 specs,
-                result,
+                cases,
                 config,
                 resume=args.resume,
                 max_windows=args.max_windows,
                 show_progress=not args.no_progress,
                 verbose_samples=args.verbose_samples,
             )
+            result["quality_policy"] = cases.get("quality_policy", args.quality_policy)
+            result["quality_passed"] = cases.get("quality_passed", False)
+            result["anchor_quality"] = {
+                name: info.get("quality", {})
+                for name, info in cases["datasets"].items()
+            }
         print(json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False))
         return 0
 

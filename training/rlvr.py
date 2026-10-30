@@ -298,6 +298,7 @@ def train_rlvr(config: RLVRConfig) -> None:
     if len(train_frame) < config.train_batch_size:
         raise ValueError("RLVR training dataset is smaller than train_batch_size")
     configure_training_environment()
+    validate_rlvr_hardware(config.n_gpus_per_node)
     try:
         import agentlightning as agl
         from agentlightning.adapter import LlmProxyTraceToTriplet
@@ -305,10 +306,15 @@ def train_rlvr(config: RLVRConfig) -> None:
         raise RuntimeError(
             "RLVR requires agentlightning==0.3.0, verl==0.6.1, and their training dependencies"
         ) from exc
-    if version("agentlightning") != "0.3.0":
-        raise RuntimeError(
-            "this RLVR integration targets agentlightning==0.3.0; install the pinned training dependencies"
-        )
+    for package, expected in (
+        ("agentlightning", "0.3.0"),
+        ("verl", "0.6.1"),
+        ("vllm", "0.10.2"),
+    ):
+        if version(package) != expected:
+            raise RuntimeError(
+                f"this RLVR integration requires {package}=={expected}; install the pinned training dependencies"
+            )
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(config.model_path, trust_remote_code=True)
@@ -324,8 +330,11 @@ def train_rlvr(config: RLVRConfig) -> None:
                     f"RLVR {split} prompt {index} exceeds max_prompt_length={config.max_prompt_length}; shorten the evidence context or increase the explicit limit"
                 )
     from training.agent import LiteAgent
+    from training.lightning import ForecastingDaemon
 
-    algorithm = agl.VERL(build_agent_lightning_config(config))
+    algorithm = agl.VERL(
+        build_agent_lightning_config(config), daemon_cls=ForecastingDaemon
+    )
     trainer = agl.Trainer(
         n_runners=config.n_runners,
         algorithm=algorithm,
@@ -351,6 +360,24 @@ def configure_training_environment() -> None:
     from training.sft import normalize_training_environment
 
     normalize_training_environment()
+
+
+def validate_rlvr_hardware(n_gpus: int) -> None:
+    import torch
+
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "RLVR requires CUDA-enabled NVIDIA GPUs; --print-config remains available without a GPU"
+        )
+    if torch.cuda.device_count() < n_gpus:
+        raise RuntimeError(
+            f"RLVR requested {n_gpus} GPUs but only {torch.cuda.device_count()} are visible; set CUDA_VISIBLE_DEVICES and --n-gpus-per-node consistently"
+        )
+    for index in range(n_gpus):
+        if torch.cuda.get_device_capability(index)[0] < 8:
+            raise RuntimeError(
+                "the pinned asynchronous BF16 RLVR backend requires NVIDIA Ampere or newer GPUs (compute capability >= 8.0)"
+            )
 
 
 def load_rlvr_dataframe(dataset_path: str) -> pd.DataFrame:

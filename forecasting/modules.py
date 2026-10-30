@@ -9,7 +9,11 @@ from utils.config import CastFlowConfig
 from utils.io import forecast_timestamps
 from utils.llm import OpenAICompatibleLLM
 from utils.schema import ForecastResult, ToolObservation, WorkflowState
-from evaluation.evaluate import extract_answer_text, parse_forecast_sequence
+from evaluation.evaluate import (
+    cleanup_jsonish,
+    extract_answer_text,
+    parse_forecast_sequence,
+)
 from forecasting.prompts import (
     build_api_forecasting_messages,
     procedural_guidance,
@@ -343,16 +347,26 @@ def parse_tool_schedule(text: str) -> list[str]:
 
 
 def extract_json_object(text: str) -> str:
-    text = extract_answer_text(text)
-    decoder = json.JSONDecoder()
-    for match in re.finditer(r"\{", text):
-        try:
-            payload, end = decoder.raw_decode(text[match.start() :])
-        except ValueError:
-            continue
-        if isinstance(payload, dict):
-            return text[match.start() : match.start() + end]
-    raise ValueError("no JSON object found")
+    text = cleanup_jsonish(extract_answer_text(text))
+    payload = json.loads(
+        text,
+        object_pairs_hook=_unique_planner_object,
+        parse_constant=lambda _: (_ for _ in ()).throw(
+            ValueError("nonfinite planner value")
+        ),
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("planning requires one complete JSON object")
+    return text
+
+
+def _unique_planner_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate planner JSON key")
+        result[key] = value
+    return result
 
 
 def append_note(existing: str, note: str) -> str:

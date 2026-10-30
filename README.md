@@ -239,9 +239,17 @@ bash scripts/00_initialize.sh --datasets BE,ETTh,WP
 ```
 
 This command checks every input before preparation, prepares the selected
-experts, compares up to three parameter candidates per expert on a chronological
-tail of the supplied training data, freezes their parameters, constructs the
-anchor libraries, and explores teacher trajectories to build experience memory.
+experts, attempts up to 24 distinct parameter candidates per expert, freezes
+their parameters, constructs the anchor libraries, and checks each frozen prior
+on a reserved chronological confirmation interval before exploring teacher
+trajectories. Parameter search and confirmation use separate parts of the
+training-side tail. The saved library excludes confirmation targets.
+The default quality gate requires at least four complete confirmation windows,
+at least 1% lower MSE than the fixed seasonal baseline, no MSE regression against
+the untuned incumbent selected before confirmation, and no MAE regression against
+either reference. An unsuccessful gate stops the full initialization before
+teacher calls. `--quality-policy report` explicitly prepares a diagnostic bundle
+whose qualification status remains visible.
 The teacher endpoint is used for trajectory generation; a trained local 4B
 checkpoint is prepared and served separately in the training steps below.
 The command prints the resulting library and memory paths. By default, runtime
@@ -251,8 +259,8 @@ assets under `../castflow_runtime/models`, outside the source checkout.
 ```bash
 # Inspect choices without creating assets or calling models:
 python -m cli initialize --list-models
-# Select experts and bound parameter-search rounds:
-bash scripts/00_initialize.sh --datasets BE --models SeasonalNaive,HistoricAverage,Ridge --tuning-rounds 3
+# Select experts and increase the distinct-candidate budget:
+bash scripts/00_initialize.sh --datasets BE --models SeasonalNaive,HistoricAverage,Ridge --tuning-rounds 64
 # Prepare expert cases without teacher calls:
 bash scripts/00_initialize.sh --datasets BE --anchors-only
 # Custom input with explicit dimensions:
@@ -260,6 +268,8 @@ bash scripts/00_initialize.sh --data /path/train.csv --name custom --target-col 
 ```
 
 The same command resumes compatible completed stages and validates their hashes.
+Searches report attempted, successful, and failed recipes, plus finite-space
+exhaustion. A model with no tunable parameters is not counted as repeated trials.
 Changed data, models, parameters, or source create a distinct initialization
 identity. Use `--output-root` and `--model-store` to choose storage locations.
 Pretrained expert weights are loaded locally; `--download-models` explicitly
@@ -357,6 +367,7 @@ and the matched ensemble prior; teacher responses are not used as labels.
 bash scripts/06_train_rlvr.sh
 ```
 
+RLVR uses the pinned CUDA backend on Ampere or newer GPUs with BF16 support.
 Supply a separate held-out training-side validation parquet through
 `RL_VALIDATION_PATH`; its prompts must not overlap the training prompts.
 Output: `models/rl_cross_domain/`.

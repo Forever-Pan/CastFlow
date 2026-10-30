@@ -25,12 +25,36 @@ python -m cli initialize --datasets BE,ETTh,WP
 ```
 
 The initializer checks all selected training inputs before model preparation.
-It prepares named experts, compares bounded parameter candidates using rolling
-origins in the final 20% of the supplied training CSV, freezes their parameters,
-and builds one anchor library per dataset. Predictors receive only their own
-lookback; future training labels enter the parameter-selection scorer. The
-complete supplied training CSV is then eligible for library construction.
-Use `--validation-fraction`, `--tuning-rounds`, and `--max-windows` to control this
+It prepares named experts and defaults to 24 distinct parameter candidates per
+expert, with a maximum budget of 256. Candidate 1 preserves the untuned recipe;
+subsequent candidates are reproducible and prefix-stable as the budget grows.
+Finite parameter spaces report exhaustion; failed fits remain recorded and are
+ineligible instead of aborting all remaining candidates or disappearing from
+their score. A candidate must succeed on every preselected selection window.
+
+The final 20% of the supplied training CSV is divided chronologically into
+selection and confirmation intervals. Their complete target windows do not
+overlap. Predictors receive lookbacks only. `--tuning-windows 12` and
+`--confirmation-windows 12` choose representative origins without inspecting
+target values. Parameters and the untuned incumbent are selected using only the
+earlier interval. The saved library ends before the confirmation targets, and
+that exact frozen library is evaluated on the later interval.
+
+Default `--quality-policy required` requires at least four complete confirmation
+windows, MSE at least 1% below a fixed-period SeasonalNaive reference, MSE no worse
+than the untuned incumbent, and MAE no worse than either reference. The incumbent
+is the default expert recipe chosen before confirmation by selection MSE, then
+MAE. Numerical ties at the zero-error floor are allowed. A failed gate stops
+initialization before teacher exploration and names its saved report.
+`--min-mse-improvement`, `--max-mae-regression`, and
+`--min-confirmation-windows` expose the acceptance settings. Explicit
+`--quality-policy report` prepares a diagnostic bundle with `quality_passed`
+still reported. It does not turn a failed criterion into a successful one.
+
+This gate assesses the prepared Anchorer prior. Teacher exploration and local
+forecaster training are separate stages; it is not an end-to-end forecasting
+quality result. Confirmation results are not fed back into parameter selection.
+Use `--validation-fraction`, `--tuning-rounds`, and `--max-windows` to control
 preparation. A capped initialization is a smaller library, not a full-data run.
 
 The next stage uses the frozen teacher for candidate tool-use trajectories and
@@ -51,7 +75,8 @@ Runtime files default to `../castflow_runtime/initialization`, with prepared
 experts under `../castflow_runtime/models`. Identical inputs and settings resume
 completed stages after integrity checks; changed source, data, model, or
 parameters produce a distinct identity. `--no-resume` starts a new preparation.
-Completed memory windows, including rejected trajectories, are recorded for
+Selection origins, candidate failures, completed library cases, and confirmation
+origins are checkpointed for recovery. Completed memory windows, including rejected trajectories, are recorded for
 resume. An interrupted external call that has not committed may be executed
 again; already committed window outcomes are reused.
 The returned paths can be passed to the individual commands:
@@ -151,6 +176,13 @@ paper's absolute MSE term, relative MSE improvement over the matched prior, and
 the specified invalid-output penalties. MAE is reported as an evaluation metric;
 there is no separately learned tool-call reward. Residual diagnostics remain
 restricted to training-side exploration.
+
+The pinned RLVR backend requires CUDA GPUs with compute capability 8.0 or newer
+and BF16 support. SFT separately chooses a supported precision and can run on CPU.
+Before GRPO batch construction, CastFlow checks complete candidate groups,
+explicit finite rewards, one response trace per candidate, token limits, and
+identical prompt tokens within each group. Missing candidates fail explicitly
+instead of changing the group size or receiving an implicit zero reward.
 
 Supply separate train and held-out training-side validation parquet files to
 `train-rlvr --dataset-path ... --validation-path ...`; overlapping prompts are

@@ -14,6 +14,8 @@ import pandas as pd
 _NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z")
 _POSITION = re.compile(r"(?:t\+|t_|step_?|pred_?|y_?)?(\d+)\Z", re.IGNORECASE)
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}(?:[ T].*)?\Z")
+_CONTENT_TAG_START = re.compile(r"<\s*/?\s*(?:think|analysis|reasoning|answer)\b", re.I)
+_CONTENT_TAG = re.compile(r"<\s*(/?)\s*(think|analysis|reasoning|answer)\s*>", re.I)
 
 
 def extract_answer_text(text: str) -> str:
@@ -21,18 +23,52 @@ def extract_answer_text(text: str) -> str:
     if not isinstance(text, str) or not text.strip():
         return ""
     value = text.strip()
-    for tag in ("think", "analysis", "reasoning"):
-        value = re.sub(rf"<{tag}>.*?</{tag}>", "", value, flags=re.I | re.S)
-        if re.search(rf"<{tag}>", value, flags=re.I):
+    reasoning: tuple[str, int] | None = None
+    excluded: list[tuple[int, int]] = []
+    answer_start: int | None = None
+    answer: tuple[int, int] | None = None
+    for marker in _CONTENT_TAG_START.finditer(value):
+        end = value.find(">", marker.start())
+        token = (
+            _CONTENT_TAG.fullmatch(value[marker.start() : end + 1])
+            if end >= 0
+            else None
+        )
+        if token is None:
             return ""
-        if re.search(rf"</{tag}>", value, flags=re.I):
-            value = re.split(rf"</{tag}>", value, flags=re.I)[-1]
-    answers = re.findall(r"<answer>\s*(.*?)\s*</answer>", value, flags=re.I | re.S)
-    if answers:
-        return answers[0].strip() if len(answers) == 1 else ""
-    if re.search(r"</?answer\b", value, flags=re.I):
+        closing, tag = bool(token.group(1)), token.group(2).lower()
+        if reasoning is not None:
+            # Answer examples inside a complete reasoning block are never final.
+            if tag == "answer":
+                continue
+            if not closing or tag != reasoning[0]:
+                return ""
+            excluded.append((reasoning[1], end + 1))
+            reasoning = None
+            continue
+        if tag != "answer":
+            if closing or answer_start is not None:
+                return ""
+            reasoning = (tag, marker.start())
+        elif closing:
+            if answer_start is None:
+                return ""
+            answer = (answer_start, marker.start())
+            answer_start = None
+        else:
+            if answer_start is not None or answer is not None:
+                return ""
+            answer_start = end + 1
+    if reasoning is not None or answer_start is not None:
         return ""
-    return value.strip()
+    if answer is not None:
+        return value[answer[0] : answer[1]].strip()
+    cursor = 0
+    for start, end in excluded:
+        if value[cursor:start].strip():
+            return ""
+        cursor = end
+    return value[cursor:].strip()
 
 
 def is_number(value: Any) -> bool:

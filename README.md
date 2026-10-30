@@ -115,14 +115,20 @@ The configuration uses **Qwen3-4B** as the local trainable forecasting backbone.
 
 ### Foundational Anchorer Runtime
 
-`backends/` contains wrappers and local code for the anchorer model pool. Put the required weights under the expected runtime subdirectories, for example:
+`backends/` provides named expert adapters and an explicit model catalog. Keep
+model assets outside the source checkout, for example:
 
 ```text
-backends/shared/foundation_models/
-backends/packages/
+../castflow_runtime/models/ChronosTiny/
 ```
 
-The anchorer can then build per-domain `case_library/*/anchor_library.json` files. If a model weight is missing, the corresponding anchor model may fail or be skipped depending on the runtime wrapper.
+The initializer prepares reusable expert recipes, validates requested local
+weights, and saves the selected parameters with each library. It stops on a
+missing selected expert instead of silently changing the ensemble. Native
+statistical experts fit on each lookback and do not require pretrained weights.
+Run `python -m cli initialize --list-models` to inspect the choices. Additional
+local deep or foundation models can use an explicit `module:callable` adapter
+in the expert manifest consumed by `build-anchorer`.
 
 ## Environment 💻
 
@@ -143,7 +149,7 @@ cd CastFlow
 | `openai` | Planning, Reflection, and OpenAI-compatible inference |
 | `tqdm` | progress display for long-running workflows |
 | `python-dateutil`, `holidays` | time-series calendar utilities |
-| `statsmodels`, `pyclustering` | Foundational Anchorer case-library build |
+| `statsmodels`, `dtaidistance` | statistical experts and case distances |
 | PyTorch | `>=2.1`, for SFT |
 | `transformers` | `>=4.51.0`, required for Qwen3 support |
 | `datasets` | `>=2.14` |
@@ -151,10 +157,9 @@ cd CastFlow
 | `accelerate`, `deepspeed` | distributed SFT |
 | `einops`, `safetensors` | deep learning / model loading |
 | `pyarrow` | `>=12`, RL parquet I/O |
-| `agentlightning` | RLVR |
-| `vllm` | local forecasting serving |
-| `chronos-forecasting`, `timesfm` (`<3.12`), `xgboost`, `lightgbm` | anchorer model pool |
-| `scipy`, `scikit-learn`, `prophet` | classical / statistical models |
+| `agentlightning==0.3.0`, `verl==0.6.1` | RLVR |
+| `vllm==0.10.2` | rollout and local forecasting serving |
+| `chronos-forecasting`, `xgboost`, `lightgbm` | optional named expert adapters |
 
 The package metadata in `pyproject.toml` already defines the core, anchorer, training, RLVR, and serving dependency groups.
 
@@ -167,6 +172,8 @@ Install the core package, then add the components needed for your run:
 ```bash
 python -m pip install -e .
 python -m cli --help
+# Native experts and one-command initialization:
+python -m pip install -e '.[initialization]'
 # Optional expert-model pool:
 python -m pip install -e '.[anchorer]'
 # Optional training and RLVR:
@@ -186,8 +193,7 @@ cp .env.example .env
 
 Set the planning/reflection endpoint, credential, and model name in `.env`.
 The forecasting endpoint must point to your separately served trained model.
-The example sets a 5,000-token forecasting limit, matching the reported limit;
-the code default remains 7,000 unless overridden. See
+The forecasting completion limit defaults to 5,000 tokens. See
 [runtime and reproducibility notes](docs/REPRODUCIBILITY.md) for configuration,
 required external assets, and the scope of this public implementation.
 
@@ -202,10 +208,10 @@ They do not identify a particular historical experiment run.
 | Local trainable forecaster | Qwen3-4B |
 | Memory construction | K-parallel exploration, `PARALLEL_PLAN_K=4` |
 | Memory retrieval | top-k memory retrieval, default `K=3`, threshold `0.90` |
-| Reflection retries | train `3`, test `10` |
+| Reflection retries | initial attempt plus up to `3` training-side or `10` inference retries |
 | SFT | cross-domain, 1 epoch, learning rate `5e-5`, global batch size 8 |
 | RLVR | GRPO, group size `G=8`, temperature `1.0`, learning rate `2e-6`, KL coefficient `0.0`, 3 epochs |
-| Forecast output length | 5,000 in `.env.example`; code default 7,000 |
+| Forecast output length | 5,000 tokens |
 
 ## CLI Usage 🖥️
 
@@ -223,7 +229,48 @@ The numbered scripts in `scripts/` wrap these commands with the default cross-do
 
 ## End-to-End Workflow 🚀
 
-Run the steps below from the repository root in order.
+### One-command initialization
+
+After placing training CSVs and configuring the frozen teacher endpoint in
+`.env`, build the expert libraries and cross-domain experience memory together:
+
+```bash
+bash scripts/00_initialize.sh --datasets BE,ETTh,WP
+```
+
+This command checks every input before preparation, prepares the selected
+experts, compares up to three parameter candidates per expert on a chronological
+tail of the supplied training data, freezes their parameters, constructs the
+anchor libraries, and explores teacher trajectories to build experience memory.
+The teacher endpoint is used for trajectory generation; a trained local 4B
+checkpoint is prepared and served separately in the training steps below.
+The command prints the resulting library and memory paths. By default, runtime
+files are written under `../castflow_runtime/initialization` and reusable model
+assets under `../castflow_runtime/models`, outside the source checkout.
+
+```bash
+# Inspect choices without creating assets or calling models:
+python -m cli initialize --list-models
+# Select experts and bound parameter-search rounds:
+bash scripts/00_initialize.sh --datasets BE --models SeasonalNaive,HistoricAverage,Ridge --tuning-rounds 3
+# Prepare expert cases without teacher calls:
+bash scripts/00_initialize.sh --datasets BE --anchors-only
+# Custom input with explicit dimensions:
+bash scripts/00_initialize.sh --data /path/train.csv --name custom --target-col value --timestamp-col date --lookback 96 --horizon 24 --seasonal-period 24
+```
+
+The same command resumes compatible completed stages and validates their hashes.
+Changed data, models, parameters, or source create a distinct initialization
+identity. Use `--output-root` and `--model-store` to choose storage locations.
+Pretrained expert weights are loaded locally; `--download-models` explicitly
+permits downloading missing selected weights. See the
+[runtime notes](docs/REPRODUCIBILITY.md) for custom dataset manifests and use of
+the resulting bundle. The individual commands remain available below.
+
+### Individual stages
+
+Run the steps below from the repository root in order, or use the libraries and
+memory paths printed by `initialize` to continue at the export stage.
 
 <details open>
 <summary><strong>1. Build The Foundational Anchorer Case Libraries</strong></summary>
@@ -298,7 +345,8 @@ Defaults: base model `../models/Qwen3-4B`, output `models/sft_cross_domain`, `ma
 bash scripts/05_prepare_rl.sh
 ```
 
-Output: `data/rl/cross_domain_rl.parquet`
+Output: `data/rl/cross_domain_rl.parquet`. RL records retain true future labels
+and the matched ensemble prior; teacher responses are not used as labels.
 
 </details>
 
@@ -309,7 +357,9 @@ Output: `data/rl/cross_domain_rl.parquet`
 bash scripts/06_train_rlvr.sh
 ```
 
-Output: `models/rl_cross_domain/`
+Supply a separate held-out training-side validation parquet through
+`RL_VALIDATION_PATH`; its prompts must not overlap the training prompts.
+Output: `models/rl_cross_domain/`.
 
 </details>
 
@@ -322,7 +372,9 @@ Start vLLM before forecasting. The served model name must match `LOCAL_MODEL_NAM
 bash scripts/07_serve_local_forecaster.sh
 ```
 
-By default this serves `models/sft_cross_domain` on port `8002`. Set `LOCAL_FORECAST_MODEL_PATH` to use an RL checkpoint instead.
+By default this resolves the latest complete RL actor Hugging Face export under
+`models/rl_cross_domain` and serves it on port `8002`. Set
+`LOCAL_FORECAST_MODEL_PATH` to select another complete checkpoint explicitly.
 
 </details>
 

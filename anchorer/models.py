@@ -29,11 +29,15 @@ DATASET_PACKAGES = {
     "PJM": "castmaster_epf_pjm",
     "EPF_PJM": "castmaster_epf_pjm",
     "ETTh1": "castmaster_etth1",
+    "ETTh": "castmaster_etth1",
     "ETT_ETTh1": "castmaster_etth1",
     "ETTm1": "castmaster_ettm1",
+    "ETTm": "castmaster_ettm1",
     "ETT_ETTm1": "castmaster_ettm1",
 }
-DATASET_PACKAGES.update({key.lower(): value for key, value in list(DATASET_PACKAGES.items())})
+DATASET_PACKAGES.update(
+    {key.lower(): value for key, value in list(DATASET_PACKAGES.items())}
+)
 
 ANCHORER_PACKAGE_ROOT = "backends.packages"
 
@@ -48,7 +52,9 @@ class AnchorerForecastResult:
 def anchorer_package_name(dataset_name: str | None) -> str | None:
     if not dataset_name:
         return None
-    return DATASET_PACKAGES.get(dataset_name, DATASET_PACKAGES.get(dataset_name.lower()))
+    return DATASET_PACKAGES.get(
+        dataset_name, DATASET_PACKAGES.get(dataset_name.lower())
+    )
 
 
 def import_anchorer_modules(dataset_name: str | None) -> tuple[Any, Any] | None:
@@ -56,8 +62,17 @@ def import_anchorer_modules(dataset_name: str | None) -> tuple[Any, Any] | None:
     if not package:
         return None
     module_prefix = f"{ANCHORER_PACKAGE_ROOT}.{package}"
-    models_base = importlib.import_module(f"{module_prefix}.models.base")
-    forecast_mod = importlib.import_module(f"{module_prefix}.tools.forecast")
+    try:
+        models_base = importlib.import_module(f"{module_prefix}.models.base")
+        forecast_mod = importlib.import_module(f"{module_prefix}.tools.forecast")
+    except ModuleNotFoundError as exc:
+        if exc.name and (
+            module_prefix == exc.name or module_prefix.startswith(exc.name + ".")
+        ):
+            raise RuntimeError(
+                "legacy expert package is not installed; rebuild the anchor library with an explicit expert manifest"
+            ) from exc
+        raise
     return models_base, forecast_mod
 
 
@@ -80,9 +95,19 @@ def forecast_with_anchorer_models(
 ) -> AnchorerForecastResult:
     modules = import_anchorer_modules(dataset_name)
     if modules is None:
-        return AnchorerForecastResult(forecasts={}, failures={"backends": "dataset package not found"}, model_names=[])
+        return AnchorerForecastResult(
+            forecasts={},
+            failures={"backends": "dataset package not found"},
+            model_names=[],
+        )
     models_base, forecast_mod = modules
-    aliases = model_names or [str(model.alias) for model in models_base.get_default_models()]
+    aliases = (
+        list(dict.fromkeys(model_names))
+        if model_names is not None
+        else [str(model.alias) for model in models_base.get_default_models()]
+    )
+    if not aliases:
+        raise ValueError("expert pool must not be empty")
     forecasts: dict[str, np.ndarray] = {}
     failures: dict[str, str] = {}
     for alias in aliases:
@@ -94,9 +119,20 @@ def forecast_with_anchorer_models(
                 season_length=seasonal_period,
                 timestamps=timestamps,
             )
-            forecasts[alias] = np.asarray(pred, dtype=float)
-        except Exception as exc:  # noqa: BLE001 - preserve model failure for auditability
+            values = np.asarray(pred, dtype=float)
+            if values.shape != (horizon,) or not np.isfinite(values).all():
+                raise ValueError(
+                    f"expert output must contain exactly {horizon} finite values"
+                )
+            forecasts[alias] = values
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - preserve model failure for auditability
             if strict:
-                raise RuntimeError(f"anchorer model failed during case-library construction: {alias}") from exc
+                raise RuntimeError(
+                    f"anchorer model failed during case-library construction: {alias}"
+                ) from exc
             failures[alias] = f"{type(exc).__name__}: {exc}"
-    return AnchorerForecastResult(forecasts=forecasts, failures=failures, model_names=aliases)
+    return AnchorerForecastResult(
+        forecasts=forecasts, failures=failures, model_names=aliases
+    )

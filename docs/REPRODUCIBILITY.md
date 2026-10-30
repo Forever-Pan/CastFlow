@@ -1,94 +1,173 @@
-# Runtime and reproducibility notes
+# Runtime configuration
 
-## Setup and external assets
+## Inputs and storage
 
-Run the numbered Bash scripts from the repository root on Linux with Python
-3.10 or 3.11. Install the core package and the optional dependency groups needed
-by the selected step. Supply datasets, forecasting and expert-model weights,
-case libraries, and experience-memory files separately. These assets are not
-included in this source release. Missing expert weights may change the active
-ensemble pool; record the actual models and checkpoint revisions in each run.
+Use Python 3.10 or 3.11 for the training and serving stack. Native expert
+preparation and the core CLI run on CPU; SFT, RLVR, and local 4B serving require
+their selected runtime dependencies and suitable hardware. Install only the
+optional groups needed by the chosen experts and workflow stages.
 
-The README uses the paper's ETTh/ETTm names. The CLI identifiers are ETTh1/ETTm1.
-The registered paths and window settings are in `utils/registry.py`. The loader
-reads supplied CSVs; it does not reconstruct a chronological 7:1:2 split for you.
-Record and preserve your split boundaries and preprocessing. Pass `--target-col`
-and `--timestamp-col` when the input schema does not match the defaults.
+Supply chronologically split CSVs, model weights, and generated libraries
+separately. These assets are not part of the source checkout. The registered
+filenames and window settings are in `utils/registry.py`; ETTh/ETTm resolve to
+ETTh1/ETTm1. The loader validates finite targets, unique chronological timestamps,
+and positive window sizes. It does not silently drop invalid target rows or
+create train/test splits. Pass explicit target and timestamp column names when
+the input schema differs from the defaults.
 
-Only source information available at the forecast origin belongs in inference
-inputs. Future-period covariate forecasts require issue-time provenance;
-realized future target values are evaluation labels, not forecasting evidence.
-The loader alone cannot establish that a field is an origin-issued forecast.
-
-## Configure the two model endpoints
-
-Copy `.env.example` to `.env`, fill in the external reasoning endpoint and key,
-and set the local forecasting endpoint to your served trained checkpoint.
-Keep private keys out of commits. Model identifiers depend on the API provider.
-The external endpoint is used for planning and reflection. The local endpoint
-is used for specialized forecasting during `forecast` when configured. If it
-is absent, the implementation can use the general model or fallback path, so
-configure both endpoints when evaluating the role-specialized model.
-
-The serving script defaults to `models/sft_cross_domain`. To use an exported
-SFT-plus-RLVR checkpoint, set `LOCAL_FORECAST_MODEL_PATH` explicitly:
+## Initialize cases and experience memory
 
 ```bash
-LOCAL_FORECAST_MODEL_PATH=/path/to/exported/checkpoint bash scripts/07_serve_local_forecaster.sh
+python -m pip install -e '.[initialization]'
+cp .env.example .env
+# Fill in the frozen teacher endpoint, model, and credential, then:
+python -m cli initialize --datasets BE,ETTh,WP
 ```
 
-`--no-api` disables API calls and exercises fallback behavior. It is useful for
-an offline smoke check and does not evaluate the trained forecasting model.
+The initializer checks all selected training inputs before model preparation.
+It prepares named experts, compares bounded parameter candidates using rolling
+origins in the final 20% of the supplied training CSV, freezes their parameters,
+and builds one anchor library per dataset. Predictors receive only their own
+lookback; future training labels enter the parameter-selection scorer. The
+complete supplied training CSV is then eligible for library construction.
+Use `--validation-fraction`, `--tuning-rounds`, and `--max-windows` to control this
+preparation. A capped initialization is a smaller library, not a full-data run.
 
-## Public implementation defaults
+The next stage uses the frozen teacher for candidate tool-use trajectories and
+saves successful experience memory. It does not train the local 4B forecaster.
+After every dataset is complete, the command returns the cross-domain memory
+path and per-dataset library paths. `--anchors-only` ends after expert cases;
+it does not claim that experience memory is ready.
 
-| Setting | Public implementation |
+Defaults are SeasonalNaive, HistoricAverage, AutoARIMA, and Theta. Inspect
+`initialize --list-models` to choose other experts. Ridge uses NumPy; XGBoost and
+LightGBM require `.[expert-ml]`; ChronosTiny requires `.[foundation]` and local
+`amazon/chronos-t5-tiny` weights at `<model-store>/ChronosTiny`. Native experts
+save recipes and fit each lookback. `--download-models` explicitly allows
+preparing missing selected pretrained weights. A missing selected dependency
+or weight stops initialization before the ensemble is built.
+
+Runtime files default to `../castflow_runtime/initialization`, with prepared
+experts under `../castflow_runtime/models`. Identical inputs and settings resume
+completed stages after integrity checks; changed source, data, model, or
+parameters produce a distinct identity. `--no-resume` starts a new preparation.
+Completed memory windows, including rejected trajectories, are recorded for
+resume. An interrupted external call that has not committed may be executed
+again; already committed window outcomes are reused.
+The returned paths can be passed to the individual commands:
+
+```bash
+python -m cli export-memory-data --memory /path/to/experience_memory.json --output /path/to/sft.csv
+python -m cli forecast --dataset BE --memory /path/to/experience_memory.json --anchor-library /path/to/BE/anchor_library.json --output /path/to/predictions.csv
+```
+
+For mixed or custom inputs, `--dataset-manifest /path/datasets.json` accepts a
+JSON list. Relative paths are resolved against the manifest directory:
+
+```json
+[
+  {
+    "name": "custom",
+    "data_path": "train.csv",
+    "split": "train",
+    "lookback": 96,
+    "horizon": 24,
+    "seasonal_period": 24,
+    "stride": 24,
+      "memory_stride": 24,
+    "target_col": "value",
+    "timestamp_col": "date"
+  }
+]
+```
+
+All initialization inputs must belong to the training side. Expert recipes and
+parameter selection use these inputs only; a final evaluation split remains
+separate. Test-named paths are rejected as an additional input guard.
+Registered datasets retain separate anchor and memory stride defaults from the
+registry. In custom manifests, `memory_stride` defaults to `stride`; an explicit
+CLI `--stride` sets both.
+
+## Model endpoints and generation
+
+The external endpoint configured in `.env` supplies frozen planning, reflection,
+and training-side teacher generation. Normal `forecast` uses the separately
+served specialized forecasting checkpoint; it requires the local endpoint.
+The serving script resolves the latest complete RL actor export, or accepts
+`LOCAL_FORECAST_MODEL_PATH` explicitly. Credentials stay in the ignored `.env`
+or process environment. Set model revision fields when endpoint model names can
+refer to changing checkpoints.
+
+| Setting | Default |
 | --- | --- |
-| Retrieval | CLI `--memory-top-k 3 --memory-threshold 0.90` |
-| Training-side exploration | `PARALLEL_PLAN_K=4`, up to 3 reflection attempts |
-| Test inference | Up to 10 reflection attempts |
-| Forecast generation | Temperature 0.3 in `forecasting/modules.py` |
-| Forecast completion limit | Code default 7,000; `.env.example` explicitly uses 5,000 |
-| Planning and reflection | Frozen API models; temperature 0.0 |
+| Memory retrieval | top-k 3; cosine threshold 0.90 |
+| Training-side strategies | 4 candidates |
+| Workflow retries | first attempt plus 3 training-side or 10 inference retries |
+| Forecast completion | 5,000 tokens; temperature 0.3 |
+| Planning and reflection | frozen API model; temperature 0.0 |
+| API retry | one explicit retry layer; up to 2 retries for temporary failures |
+| Diagnostic reuse | `current_plan`, scoped to one request |
 
-Settings above describe this public implementation. Reproducing a historical
-table requires its actual command, checkpoint, memory, expert library, data
-split, generation settings, and output records. A public default or a later
-source cleanup does not establish that provenance.
+These settings are configurable. The selected expert parameters and input
+identities are stored with initialized libraries. Library v2 uses combined
+normalized DTW, Euclidean, and cosine distances and historical-MSE softmax
+weights. `build-anchorer --anchor-distance-weights` can set the three distance
+coefficients. An old library must contain recoverable expert losses to migrate;
+winner counts alone cannot reconstruct those losses.
 
-The current anchorer in `anchorer/build.py` uses normalized cluster winner
-counts for expert weights. Its fallback ensemble uses fixed default weights.
-These paths are different from a historical-loss softmax. Use the exact
-evaluated implementation and stored expert-performance records when reproducing
-that formulation; do not infer its parameters from this release.
+`--no-api` enables explicit prior fallback without model calls. Such a result is
+marked `prior_fallback`, not an accepted model forecast. Without a usable prior,
+the result is marked missing. Forecast responses undergo finite-value, complete
+horizon, and timestamp checks before frozen semantic reflection. At the retry
+limit, a structurally valid response from the same request is preferred, followed
+by its usable ensemble prior. Future test labels never choose the response.
 
-The diagnostic feature-reuse and persistent stage-recovery measurements use a
-separate experiment implementation. These optimizations are not enabled by the
-numbered workflow scripts in this source snapshot.
+## Origin-issued auxiliary forecasts
 
-SFT trains context-response pairs exported from selected teacher responses.
-RLVR scores generated forecasting responses directly using the supplied targets
-and matched prior; it does not execute a full planning-reflection loop for every
-sampled candidate. Planning and reflection parameters remain frozen. The
-residual diagnostic tool is enabled only in the training-side workflow.
+Historical covariates remain in the lookback. Supply future-period auxiliary
+forecasts through a separate `--covariate-forecasts` CSV with the forecast
+timestamp column and `issued_at`. Each chosen vintage must be available no
+later than the forecast origin. A single-vintage table can use
+`--covariate-issued-at` instead. The full horizon must match the forecast
+schedule; future target values are forbidden in this input. The selected
+auxiliary forecasts are held fixed across retries. Without this explicit input,
+the workflow does not read realized future covariates from evaluation labels.
 
-The current RLVR entry passes its input parquet to both training and validation
-configuration fields. Validation on that file is a training-side diagnostic,
-not an independent held-out evaluation. Preserve a separate test split for
-final forecasting comparisons.
+For initialization, provide `covariate_forecasts_path`, optional
+`covariate_issued_at`, and optional `covariate_issue_col` in each dataset manifest
+entry. This keeps provenance separate for each dataset.
 
-The CSV evaluator in `evaluation/evaluate.py` retains its existing parsing and
-alignment rules, including positional alignment when keys do not overlap.
-Use explicitly aligned prediction/target timestamps and report invalid outputs
-when comparing runs. This maintenance update does not change historical scores,
-reward functions, or forecast-selection behavior.
+## Training and evaluation
 
-## Local checks
+SFT supervises the assistant continuation, including its reasoning and forecast,
+with prompt tokens masked. It preserves the complete response and rejects
+examples exceeding the configured context length. Global batch size defaults
+to 8; accumulation is derived from worker count and per-device batch size.
 
-```bash
-python -m cli --help
-python -m cli forecast --help
-python -m unittest discover -s tests -p 'test_*.py'
-```
+RLVR samples each group from one fixed evidence/prior context and directly
+scores each completion. It does not rerun a full planning-reflection loop for
+every candidate. Only forecasting parameters are updated. Reward combines the
+paper's absolute MSE term, relative MSE improvement over the matched prior, and
+the specified invalid-output penalties. MAE is reported as an evaluation metric;
+there is no separately learned tool-call reward. Residual diagnostics remain
+restricted to training-side exploration.
 
-The configuration tests use no model API, GPU, dataset, or checkpoint.
+Supply separate train and held-out training-side validation parquet files to
+`train-rlvr --dataset-path ... --validation-path ...`; overlapping prompts are
+rejected. RL data preparation requires actual labels and a complete matching
+prior. It never substitutes teacher predictions for labels.
+
+CSV evaluation requires full horizon alignment and finite values. Explicit
+positional forecasts must use a complete ordered sequence; timestamp forecasts
+must match all target timestamps. Invalid rows remain reported. Aggregate
+MSE/MAE/RMSE pool the valid horizon points, and the summary reports valid and
+invalid row counts. Evaluation exits unsuccessfully if any rows are invalid.
+
+## Request-scoped execution recovery
+
+Enable persistent recovery with both `--execution-journal-dir /path/journal`
+and `--request-id unique-input-id`. Committed stages are atomically persisted
+and reused only when request, input, library, configuration, model revision,
+and implementation identities match. Semantic revisions have distinct stage
+identities. A new input requires a new request ID; this is not cross-request
+forecast caching. `--diagnostic-cache-policy none` disables diagnostic reuse.

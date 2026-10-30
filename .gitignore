@@ -8,6 +8,21 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+.pytest_cache/
+.coverage
+htmlcov/
+logs/
+runs/
+results/
+artifacts/
+output/
+checkpoints/
+*.safetensors
+*.ckpt
+*.pth
+*.pt
+*.bin
+*.parquet
 .DS_Store
 
 # User-provided datasets and training outputs

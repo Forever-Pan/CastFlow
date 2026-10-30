@@ -1,137 +1,115 @@
 from __future__ import annotations
 
 import hashlib
-import json
-import os
+import math
 from pathlib import Path
-from typing import Any, Optional, cast
-
-import numpy as np
+from typing import Any, cast
 
 import agentlightning as agl
-from langchain.chat_models import init_chat_model
-from langchain_core.messages import HumanMessage
+from openai import OpenAI
 
-from training.rewards import calculate_mse, compute_contrastive_reward, extract_answer_from_tags, parse_json_column
-
-
-RL_PROMPT_SUFFIX = (
-    "You can output your response more flexible(no longer strictly based on Reference model! "
-    "You can use other tool and your knowledge! But be short)"
+from training.rewards import (
+    calculate_mse,
+    compute_contrastive_reward,
+    parse_json_column,
+    serialize_forecast,
 )
+from utils.io import atomic_write_json
 
 
 class LiteAgent(agl.LitAgent[dict[str, Any]]):
-    """AgentLightning rollout agent migrated from the original rl_agent.py.
+    """Score one forecasting continuation under a fixed evidence context.
 
-    The training semantics are intentionally close to the original script:
-    each rollout calls the hosted vLLM OpenAI-compatible endpoint supplied by
-    AgentLightning, appends the same RL prompt suffix, computes the contrastive
-    reward against `model_auxiliary_tool`, and returns the scalar reward to VERL.
+    AgentLightning schedules the G independent responses for GRPO. A candidate
+    does not acquire new tools or run the inference-time reflection/retry loop.
     """
 
-    _task_counter = 0
-
-    def __init__(self, rollout_output_dir: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        rollout_output_dir: str | None = None,
+        *,
+        max_response_length: int = 5000,
+        temperature: float = 1.0,
+        top_p: float = 0.95,
+        top_k: int = 150,
+        repetition_penalty: float = 1.0,
+    ) -> None:
         super().__init__()
-        self.rollout_output_dir = Path(rollout_output_dir) if rollout_output_dir else None
-        if self.rollout_output_dir is not None:
-            self.rollout_output_dir.mkdir(parents=True, exist_ok=True)
-        self._prompt_to_idx: dict[int, int] = {}
+        self.rollout_output_dir = (
+            Path(rollout_output_dir) if rollout_output_dir else None
+        )
+        self.max_response_length = max_response_length
+        self.temperature, self.top_p, self.top_k = temperature, top_p, top_k
+        self.repetition_penalty = repetition_penalty
 
     def rollout(
-        self,
-        task: dict[str, Any],
-        resources: agl.NamedResources,
-        rollout: agl.Rollout,
+        self, task: dict[str, Any], resources: agl.NamedResources, rollout: agl.Rollout
     ) -> float:
-        llm: agl.LLM = cast(agl.LLM, resources["main_llm"])
-        attempted_rollout = cast(agl.AttemptedRollout, rollout)
-        base_url = llm.get_base_url(attempted_rollout.rollout_id, attempted_rollout.attempt.attempt_id)
-
-        chat_model = init_chat_model(
-            model="hosted_vllm/" + llm.model,
-            model_provider="openai",
-            openai_api_base=base_url,
-            openai_api_key=llm.api_key or os.environ.get("OPENAI_API_KEY", "dummy"),
-            temperature=llm.sampling_parameters.get("temperature", 0.0),
-        )
-
-        prompt = str(task["prompt"]) + RL_PROMPT_SUFFIX
-        dataset_name = str(task.get("dataset_name", ""))
-        messages = [HumanMessage(content=prompt)]
-
-        handler = self.tracer.get_langchain_handler()
-        if handler:
-            from langchain_core.runnables import RunnableConfig
-
-            result = chat_model.invoke(messages, config=RunnableConfig(callbacks=[handler]))
-        else:
-            result = chat_model.invoke(messages)
-
-        answer = result.content if hasattr(result, "content") else str(result)
-        ground_truth = str(task.get("ground_truth", ""))
-        tool = task.get("tool", "")
-
-        answer_content = extract_answer_from_tags(str(answer))
-        answer_dict = parse_json_column(answer_content)
-        gt_dict = parse_json_column(ground_truth)
-        mse = calculate_mse(answer_dict, gt_dict)
-        reward = compute_contrastive_reward(str(answer), ground_truth, dataset_name, tool=tool)
-
-        if reward is None or np.isnan(reward) or np.isinf(reward):
-            reward = -1.0
-
-        if self.rollout_output_dir is not None:
-            task_idx = self._get_task_idx(task, prompt)
-            self._save_rollout(
-                rollout_id=attempted_rollout.rollout_id,
-                prompt=prompt,
-                answer=str(answer),
-                ground_truth=ground_truth,
-                reward=float(reward),
-                mse=float(mse) if not np.isnan(mse) else None,
-                task_idx=task_idx,
+        llm = cast(agl.LLM, resources["main_llm"])
+        attempt = cast(agl.AttemptedRollout, rollout)
+        base_url = llm.get_base_url(attempt.rollout_id, attempt.attempt.attempt_id)
+        prompt = task["prompt"]
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("RLVR task requires a nonempty prompt")
+        # Transport failures are rollout failures, not low-reward model outputs.
+        with OpenAI(
+            base_url=base_url,
+            api_key=llm.api_key or "EMPTY",
+            max_retries=0,
+            timeout=600,
+        ) as client:
+            response = client.chat.completions.create(
+                model=llm.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=llm.sampling_parameters.get(
+                    "temperature", self.temperature
+                ),
+                top_p=self.top_p,
+                max_tokens=self.max_response_length,
+                n=1,
+                extra_body={
+                    "top_k": self.top_k,
+                    "repetition_penalty": self.repetition_penalty,
+                    "return_token_ids": True,
+                },
             )
-
+        if not response.choices:
+            raise RuntimeError("forecasting backend returned no completion choices")
+        message = response.choices[0].message
+        answer = message.content or ""
+        if not isinstance(answer, str):
+            raise TypeError("forecasting backend returned non-text completion content")
+        reasoning = getattr(message, "reasoning_content", None)
+        if isinstance(reasoning, str) and reasoning and "<think>" not in answer.lower():
+            answer = f"<think>{reasoning}</think>\n{answer}"
+        truth = serialize_forecast(task["ground_truth"])
+        reward = compute_contrastive_reward(
+            answer,
+            truth,
+            str(task["dataset_name"]),
+            tool=task.get("tool"),
+            baseline=task.get("baseline_forecast"),
+        )
+        if not math.isfinite(reward):
+            raise RuntimeError("forecast reward must be finite")
+        if self.rollout_output_dir is not None:
+            mse = calculate_mse(parse_json_column(answer), parse_json_column(truth))
+            task_id = hashlib.sha256(
+                (str(task.get("dataset_name", "")) + "\n" + prompt).encode()
+            ).hexdigest()[:20]
+            attempt_id = hashlib.sha256(
+                f"{attempt.rollout_id}:{attempt.attempt.attempt.attempt_id}".encode()
+            ).hexdigest()[:24]
+            atomic_write_json(
+                self.rollout_output_dir / task_id / f"{attempt_id}.json",
+                {
+                    "rollout_id": attempt.rollout_id,
+                    "attempt_id": attempt.attempt.attempt.attempt_id,
+                    "prompt": prompt,
+                    "answer": answer,
+                    "ground_truth": truth,
+                    "reward": float(reward),
+                    "mse": float(mse) if math.isfinite(mse) else None,
+                },
+            )
         return float(reward)
-
-    def _get_task_idx(self, task: dict[str, Any], prompt: str) -> int:
-        if "idx" in task and task["idx"] is not None:
-            try:
-                return int(task["idx"]) + 1
-            except (TypeError, ValueError):
-                pass
-
-        prompt_md5 = hashlib.md5(prompt.encode("utf-8")).hexdigest()[:8]
-        prompt_hash_key = int(prompt_md5, 16)
-        if prompt_hash_key not in self._prompt_to_idx:
-            LiteAgent._task_counter += 1
-            self._prompt_to_idx[prompt_hash_key] = LiteAgent._task_counter
-        return self._prompt_to_idx[prompt_hash_key]
-
-    def _save_rollout(
-        self,
-        rollout_id: str,
-        prompt: str,
-        answer: str,
-        ground_truth: str,
-        reward: float,
-        mse: Optional[float],
-        task_idx: int,
-    ) -> None:
-        if self.rollout_output_dir is None:
-            return
-        prompt_dir = self.rollout_output_dir / f"prompt_{task_idx}"
-        prompt_dir.mkdir(parents=True, exist_ok=True)
-        filepath = prompt_dir / (rollout_id.replace("ro-", "") + ".json")
-        payload = {
-            "rollout_id": rollout_id,
-            "prompt": prompt,
-            "answer": answer,
-            "ground_truth": ground_truth,
-            "reward": float(reward) if not (np.isnan(reward) or np.isinf(reward)) else None,
-            "mse": float(mse) if mse is not None and not np.isnan(mse) and not np.isinf(mse) else None,
-        }
-        with filepath.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)

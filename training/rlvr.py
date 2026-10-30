@@ -1,15 +1,26 @@
 from __future__ import annotations
 
 import argparse
-import getpass
+import hashlib
 import json
+import math
 import os
-import shutil
+import re
+import tempfile
 from dataclasses import dataclass
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+from training.rewards import (
+    baseline_prediction_dict,
+    build_small_model_prediction_dict,
+    canonical_dataset_name,
+    parse_json_column,
+    serialize_forecast,
+)
 
 
 @dataclass(slots=True)
@@ -17,11 +28,12 @@ class RLVRConfig:
     dataset_path: str
     model_path: str
     output_dir: str
+    validation_data_path: str | None = None
     port: int = 30549
     train_batch_size: int = 8
     rollout_n: int = 8
     n_runners: int = 64
-    temperature: float = 1
+    temperature: float = 1.0
     top_p: float = 0.95
     top_k: int = 150
     repetition_penalty: float = 1.0
@@ -40,121 +52,181 @@ class RLVRConfig:
     test_freq: int = 1000
     rollout_output_dir: str | None = None
 
+    def validate(self) -> None:
+        for field in (
+            "port",
+            "train_batch_size",
+            "rollout_n",
+            "n_runners",
+            "total_epochs",
+            "max_prompt_length",
+            "max_response_length",
+            "n_gpus_per_node",
+            "ppo_micro_batch_size_per_gpu",
+            "log_prob_micro_batch_size_per_gpu",
+            "ref_log_prob_micro_batch_size_per_gpu",
+            "max_num_seqs",
+            "max_num_batched_tokens",
+            "save_freq",
+            "test_freq",
+        ):
+            value = getattr(self, field)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{field} must be a positive integer")
+        if self.port > 65535 or self.rollout_n < 2:
+            raise ValueError("port must be <=65535 and GRPO rollout_n must be >=2")
+        for field in ("temperature", "repetition_penalty", "learning_rate"):
+            if not math.isfinite(getattr(self, field)) or getattr(self, field) <= 0:
+                raise ValueError(f"{field} must be finite and positive")
+        if not 0 < self.top_p <= 1 or not 0 < self.gpu_memory_utilization < 1:
+            raise ValueError(
+                "top_p must be in (0,1] and gpu_memory_utilization in (0,1)"
+            )
+        if (
+            isinstance(self.top_k, bool)
+            or not isinstance(self.top_k, int)
+            or self.top_k == 0
+            or self.top_k < -1
+        ):
+            raise ValueError("top_k must be -1 or a positive integer")
+        if not self.validation_data_path:
+            raise ValueError(
+                "RLVR requires a separate held-out --validation-path; training data are not reused for validation"
+            )
+        if (
+            Path(self.dataset_path).resolve()
+            == Path(self.validation_data_path).resolve()
+        ):
+            raise ValueError("training and validation paths must differ")
+
 
 def prepare_rl_data(
-    input_path: str | Path,
-    output_path: str | Path,
-    dataset_name: str = "",
+    input_path: str | Path, output_path: str | Path, dataset_name: str = ""
 ) -> str:
-    df = pd.read_csv(input_path, keep_default_na=False)
-    if "prompt" not in df.columns:
-        raise ValueError(f"RL data requires a prompt column; found {list(df.columns)}")
-    if "ground_truth" not in df.columns:
-        if "response" in df.columns:
-            df["ground_truth"] = df["response"]
-        else:
-            df["ground_truth"] = ""
-    elif "response" in df.columns:
-        empty_ground_truth = df["ground_truth"].astype(str).str.strip() == ""
-        df.loc[empty_ground_truth, "ground_truth"] = df.loc[empty_ground_truth, "response"]
-    if "tool" not in df.columns:
-        df["tool"] = ""
-    if "idx" not in df.columns:
-        df["idx"] = df.index
-
-    resolved_dataset = dataset_name or infer_dataset_name(input_path)
-    if "dataset_name" not in df.columns:
-        df["dataset_name"] = resolved_dataset
-    else:
-        df["dataset_name"] = df["dataset_name"].replace("", resolved_dataset)
-
-    keep = [
-        col
-        for col in [
-            "idx",
-            "prompt",
-            "response",
-            "ground_truth",
-            "answer",
-            "tool",
-            "dataset_name",
-            "baseline_forecast",
-        ]
-        if col in df.columns
-    ]
-    out = df[keep].copy()
-    out = out[out["prompt"].astype(str).str.strip() != ""]
-    out = out[out["ground_truth"].astype(str).str.strip() != ""]
-    out["data_source"] = "castflow"
-    out["ability"] = "time_series_forecasting"
-    out["reward_model"] = "training.rewards.compute_contrastive_reward"
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    out.to_parquet(output_path, index=False)
-    return str(output_path)
+    if Path(input_path).resolve() == Path(output_path).resolve():
+        raise ValueError("RL data output must differ from its input")
+    frame = normalize_rlvr_frame(
+        pd.read_csv(input_path, keep_default_na=False),
+        dataset_name or infer_dataset_name(input_path),
+    )
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".parquet", dir=target.parent
+    )
+    os.close(descriptor)
+    try:
+        frame.to_parquet(temporary, index=False)
+        with open(temporary, "r+b") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return str(target)
 
 
 def infer_dataset_name(path: str | Path) -> str:
-    text = str(path).lower()
-    aliases = {
-        "windy": "windy",
-        "wind": "windy",
-        "sunny": "sunny",
-        "solar": "sunny",
-        "mopex": "MOPEX",
-        "etth1": "ETTh1",
-        "ettm1": "ETTm1",
-        "pjm": "PJM",
-        "np": "NP",
-        "be": "BE",
-        "de": "DE",
-        "fr": "FR",
-    }
-    for key, value in aliases.items():
-        if key in text:
-            return value
-    return ""
+    tokens = re.split(r"[^a-z0-9]+", Path(path).stem.lower())
+    names: set[str] = set()
+    for token in tokens:
+        try:
+            names.add(canonical_dataset_name(token))
+        except ValueError:
+            pass
+    return next(iter(names)) if len(names) == 1 else ""
+
+
+def normalize_rlvr_frame(frame: pd.DataFrame, dataset_name: str = "") -> pd.DataFrame:
+    missing = {"prompt", "ground_truth"}.difference(frame.columns)
+    if missing:
+        raise ValueError(
+            f"RLVR data are missing required columns: {sorted(missing)}; ground_truth must contain true labels, never teacher responses"
+        )
+    if frame.empty:
+        raise ValueError("RLVR dataset is empty")
+    rows: list[dict[str, Any]] = []
+    for index, source in enumerate(frame.to_dict(orient="records")):
+        prompt = source["prompt"]
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError(f"RLVR row {index} has an empty/non-text prompt")
+        truth = parse_json_column(source["ground_truth"])
+        if not truth:
+            raise ValueError(
+                f"RLVR row {index} requires a complete finite ground_truth forecast"
+            )
+        raw_name = source.get("dataset_name")
+        name = canonical_dataset_name(
+            raw_name if isinstance(raw_name, str) and raw_name.strip() else dataset_name
+        )
+        tool = source.get("tool", "")
+        raw_prior = source.get("baseline_forecast")
+        if isinstance(raw_prior, str) and not raw_prior.strip():
+            raw_prior = None
+        prior = (
+            baseline_prediction_dict(raw_prior, truth)
+            if raw_prior is not None
+            else build_small_model_prediction_dict(tool, truth)
+        )
+        if not prior:
+            raise ValueError(
+                f"RLVR row {index} requires a complete target-aligned ensemble prior for the hybrid reward"
+            )
+        extra = normalize_extra_info(source.get("extra_info"), index)
+        extra["index"] = index
+        rows.append(
+            {
+                "idx": str(source.get("idx", index)),
+                "prompt": prompt,
+                "ground_truth": serialize_forecast(truth),
+                "dataset_name": name,
+                "tool": tool if isinstance(tool, str) else serialize_forecast(tool),
+                "baseline_forecast": serialize_forecast(prior) if prior else "",
+                "data_source": "castflow",
+                "ability": "time_series_forecasting",
+                "reward_model": "training.rewards.compute_contrastive_reward",
+                "extra_info": extra,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def build_agent_lightning_config(config: RLVRConfig) -> dict[str, Any]:
-    """Build the AgentLightning/VERL config migrated from rl_agent_train.py."""
+    """AgentLightning 0.3.0 / VERL 0.6.1 single-turn GRPO configuration."""
+    config.validate()
     return {
         "algorithm": {
             "adv_estimator": "grpo",
-            "use_kl_in_reward": True,
-            "kl_coeff": 0.0,
+            "norm_adv_by_std_in_grpo": True,
+            "use_kl_in_reward": False,
             "kl_ctrl": {"type": "fixed", "kl_coef": 0.0},
         },
         "data": {
             "train_files": config.dataset_path,
-            "val_files": config.dataset_path,
+            "val_files": config.validation_data_path,
             "train_batch_size": config.train_batch_size,
             "max_prompt_length": config.max_prompt_length,
             "max_response_length": config.max_response_length,
-            "truncation": "left",
+            "truncation": "error",
         },
         "actor_rollout_ref": {
             "rollout": {
+                "name": "vllm",
+                "mode": "async",
                 "free_cache_engine": True,
                 "tensor_model_parallel_size": 1,
                 "n": config.rollout_n,
+                "temperature": config.temperature,
+                "top_p": config.top_p,
+                "top_k": config.top_k,
+                "prompt_length": config.max_prompt_length,
+                "response_length": config.max_response_length,
+                "max_model_len": config.max_prompt_length + config.max_response_length,
                 "log_prob_micro_batch_size_per_gpu": config.log_prob_micro_batch_size_per_gpu,
-                "name": "vllm",
                 "gpu_memory_utilization": config.gpu_memory_utilization,
                 "max_num_seqs": config.max_num_seqs,
                 "max_num_batched_tokens": config.max_num_batched_tokens,
                 "enable_chunked_prefill": True,
-                "sampling_params": {
-                    "temperature": config.temperature,
-                    "top_p": config.top_p,
-                    "top_k": config.top_k,
-                    "repetition_penalty": config.repetition_penalty,
-                },
-                "engine_kwargs": {
-                    "vllm": {
-                        "enable_auto_tool_choice": True,
-                        "tool_call_parser": "hermes",
-                    }
-                },
+                "enable_prefix_caching": False,
             },
             "actor": {
                 "ppo_mini_batch_size": config.train_batch_size,
@@ -167,8 +239,8 @@ def build_agent_lightning_config(config: RLVRConfig) -> dict[str, Any]:
                 "clip_ratio_c": 10.0,
                 "optim": {"lr": config.learning_rate, "weight_decay": 0.01},
                 "checkpoint": {
-                    "save_contents": ["hf_model"],
-                    "load_contents": ["hf_model"],
+                    "save_contents": ["model", "optimizer", "extra", "hf_model"],
+                    "load_contents": ["model", "optimizer", "extra"],
                     "async_save": False,
                 },
                 "fsdp_config": {
@@ -181,21 +253,21 @@ def build_agent_lightning_config(config: RLVRConfig) -> dict[str, Any]:
             },
             "ref": {
                 "log_prob_micro_batch_size_per_gpu": config.ref_log_prob_micro_batch_size_per_gpu,
-                "fsdp_config": {
-                    "model_dtype": "bf16",
-                    "wrap_policy": {"min_num_params": 100000000},
-                    "param_offload": False,
-                },
+                "fsdp_config": {"model_dtype": "bf16", "param_offload": False},
             },
-            "model": {"path": config.model_path, "trust_remote_code": True, "enable_gradient_checkpointing": True},
+            "model": {
+                "path": config.model_path,
+                "trust_remote_code": True,
+                "enable_gradient_checkpointing": True,
+            },
         },
         "trainer": {
             "n_gpus_per_node": config.n_gpus_per_node,
-            "val_before_train": False,
-            "logger": ["console", "wandb"],
-            "project_name": "VLMTimeSSeriesAgent",
-            "experiment_name": "vlm_tsss_training",
             "nnodes": 1,
+            "val_before_train": False,
+            "logger": ["console"],
+            "project_name": "CastFlow",
+            "experiment_name": "castflow_grpo",
             "test_freq": config.test_freq,
             "total_epochs": config.total_epochs,
             "save_freq": config.save_freq,
@@ -205,88 +277,86 @@ def build_agent_lightning_config(config: RLVRConfig) -> dict[str, Any]:
 
 
 def train_rlvr(config: RLVRConfig) -> None:
-    """Run RLVR/GRPO training via the migrated rl_agent.py + rl_agent_train.py flow."""
-    if not Path(config.dataset_path).exists():
-        raise FileNotFoundError(f"RLVR dataset not found: {config.dataset_path}")
-    if not Path(config.model_path).exists():
-        raise FileNotFoundError(f"model path not found: {config.model_path}")
-    Path(config.output_dir).mkdir(parents=True, exist_ok=True)
+    config.validate()
+    for label, path in (
+        ("training dataset", config.dataset_path),
+        ("validation dataset", config.validation_data_path),
+        ("model", config.model_path),
+    ):
+        if path is None or not Path(path).exists():
+            raise FileNotFoundError(f"RLVR {label} not found: {path}")
+    train_frame = load_rlvr_dataframe(config.dataset_path)
+    val_frame = load_rlvr_dataframe(str(config.validation_data_path))
+    train_prompts = {hashlib.sha256(p.encode()).digest() for p in train_frame["prompt"]}
+    if any(
+        hashlib.sha256(p.encode()).digest() in train_prompts
+        for p in val_frame["prompt"]
+    ):
+        raise ValueError(
+            "RLVR validation prompts overlap training prompts; provide a held-out split"
+        )
+    if len(train_frame) < config.train_batch_size:
+        raise ValueError("RLVR training dataset is smaller than train_batch_size")
     configure_training_environment()
-
     try:
         import agentlightning as agl
-        from agentlightning.adapter import TracerTraceToTriplet
+        from agentlightning.adapter import LlmProxyTraceToTriplet
     except ImportError as exc:
         raise RuntimeError(
-            "RLVR training requires agentlightning and its TracerTraceToTriplet adapter."
+            "RLVR requires agentlightning==0.3.0, verl==0.6.1, and their training dependencies"
         ) from exc
+    if version("agentlightning") != "0.3.0":
+        raise RuntimeError(
+            "this RLVR integration targets agentlightning==0.3.0; install the pinned training dependencies"
+        )
+    from transformers import AutoTokenizer
 
+    tokenizer = AutoTokenizer.from_pretrained(config.model_path, trust_remote_code=True)
+    for split, frame in (("training", train_frame), ("validation", val_frame)):
+        for index, prompt in enumerate(frame["prompt"]):
+            tokens = tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                tokenize=True,
+                add_generation_prompt=True,
+            )
+            if len(tokens) > config.max_prompt_length:
+                raise ValueError(
+                    f"RLVR {split} prompt {index} exceeds max_prompt_length={config.max_prompt_length}; shorten the evidence context or increase the explicit limit"
+                )
     from training.agent import LiteAgent
 
-    train_df = load_rlvr_dataframe(config.dataset_path)
-    val_df = load_rlvr_dataframe(config.dataset_path)
-    train_data = train_df.to_dict(orient="records")
-    val_data = val_df.to_dict(orient="records")
-
     algorithm = agl.VERL(build_agent_lightning_config(config))
-    adapter = TracerTraceToTriplet(
-        agent_match=None,
-        llm_call_match=r"openai\.chat\.completion",
-        _skip_empty_token_spans=True,
-    )
     trainer = agl.Trainer(
         n_runners=config.n_runners,
         algorithm=algorithm,
-        adapter=adapter,
+        adapter=LlmProxyTraceToTriplet(),
+        tracer=agl.OtelTracer(),
         port=config.port,
     )
-    trainer.fit(LiteAgent(rollout_output_dir=config.rollout_output_dir), train_dataset=train_data, val_dataset=val_data)
+    trainer.fit(
+        LiteAgent(
+            rollout_output_dir=config.rollout_output_dir,
+            max_response_length=config.max_response_length,
+            temperature=config.temperature,
+            top_p=config.top_p,
+            top_k=config.top_k,
+            repetition_penalty=config.repetition_penalty,
+        ),
+        train_dataset=train_frame.to_dict(orient="records"),
+        val_dataset=val_frame.to_dict(orient="records"),
+    )
 
 
 def configure_training_environment() -> None:
-    nvcc_path = shutil.which("nvcc")
-    if nvcc_path:
-        cuda_home = str(Path(nvcc_path).parent.parent)
-        os.environ["CUDA_HOME"] = cuda_home
-    else:
-        for cuda_path in ["/usr/local/cuda", "/usr/local/cuda-12.6", "/usr/local/cuda-12", "/usr/local/cuda-11.8"]:
-            nvcc_file = Path(cuda_path) / "bin" / "nvcc"
-            if nvcc_file.exists():
-                os.environ["CUDA_HOME"] = cuda_path
-                os.environ["PATH"] = f"{cuda_path}/bin:{os.environ.get('PATH', '')}"
-                break
+    from training.sft import normalize_training_environment
 
-    if "CUDA_HOME" in os.environ:
-        cuda_home = os.environ["CUDA_HOME"].strip()
-        if cuda_home.startswith(":"):
-            cuda_home = cuda_home[1:]
-        if ":" in cuda_home:
-            cuda_home = cuda_home.split(":")[0]
-        os.environ["CUDA_HOME"] = cuda_home
-
-    if "TRITON_CACHE_DIR" not in os.environ:
-        os.environ["TRITON_CACHE_DIR"] = "/tmp/triton_cache_" + getpass.getuser()
-    os.environ["WANDB_MODE"] = "offline"
+    normalize_training_environment()
 
 
 def load_rlvr_dataframe(dataset_path: str) -> pd.DataFrame:
-    df = pd.read_parquet(dataset_path)
-    if len(df) == 0:
-        raise ValueError(f"RLVR dataset is empty: {dataset_path}")
-    required_columns = ["prompt", "ground_truth"]
-    missing_columns = [col for col in required_columns if col not in df.columns]
-    if missing_columns:
-        raise ValueError(f"RLVR dataset is missing required columns: {missing_columns}")
-    if "dataset_name" not in df.columns:
-        df = df.copy()
-        df["dataset_name"] = infer_dataset_name(dataset_path)
-    if "tool" not in df.columns:
-        df = df.copy()
-        df["tool"] = ""
-    if "extra_info" in df.columns:
-        df = df.copy()
-        df["extra_info"] = [normalize_extra_info(value, idx) for idx, value in enumerate(df["extra_info"])]
-    return df
+    return normalize_rlvr_frame(
+        pd.read_parquet(dataset_path), infer_dataset_name(dataset_path)
+    )
 
 
 def normalize_extra_info(value: object, idx: int) -> dict[str, Any]:
@@ -300,14 +370,14 @@ def normalize_extra_info(value: object, idx: int) -> dict[str, Any]:
             out = {}
     else:
         out = {}
-    if "index" not in out:
-        out["index"] = out.get("idx", idx)
+    out.setdefault("index", idx)
     return out
 
 
 def parse_rlvr_config(args: argparse.Namespace) -> RLVRConfig:
     return RLVRConfig(
         dataset_path=args.dataset_path,
+        validation_data_path=getattr(args, "validation_path", None),
         model_path=args.model_path,
         output_dir=args.output_dir,
         port=args.port,
@@ -324,4 +394,6 @@ def parse_rlvr_config(args: argparse.Namespace) -> RLVRConfig:
         save_freq=args.save_freq,
         test_freq=args.test_freq,
         rollout_output_dir=args.rollout_output_dir,
+        max_prompt_length=getattr(args, "max_prompt_length", 10000),
+        max_response_length=getattr(args, "max_response_length", 5000),
     )

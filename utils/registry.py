@@ -20,16 +20,71 @@ DATA_ROOT = Path(__file__).resolve().parents[1] / "data" / "raw"
 
 
 DATASETS: dict[str, DatasetSpec] = {
-    "BE": DatasetSpec("BE", "train/EPF_BE_train_val.csv", "test/EPF_BE_test.csv", 168, 24, 24, 48, 48),
-    "DE": DatasetSpec("DE", "train/EPF_DE_train_val.csv", "test/EPF_DE_test.csv", 168, 24, 24, 48, 48),
-    "FR": DatasetSpec("FR", "train/EPF_FR_train_val.csv", "test/EPF_FR_test.csv", 168, 24, 24, 48, 48),
-    "NP": DatasetSpec("NP", "train/EPF_NP_train_val.csv", "test/EPF_NP_test.csv", 168, 24, 24, 48, 48),
-    "PJM": DatasetSpec("PJM", "train/EPF_PJM_train_val.csv", "test/EPF_PJM_test.csv", 168, 24, 24, 48, 48),
-    "ETTh1": DatasetSpec("ETTh1", "train/ETT_ETTh1_train_val.csv", "test/ETT_ETTh1_test.csv", 96, 96, 24, 48, 24),
-    "ETTm1": DatasetSpec("ETTm1", "train/ETT_ETTm1_train_val.csv", "test/ETT_ETTm1_test.csv", 96, 96, 24, 96, 24),
-    "MOPEX": DatasetSpec("MOPEX", "train/mopex_train_val.csv", "test/mopex_test.csv", 96, 96, 24, 48, 24),
-    "SP": DatasetSpec("SP", "train/sunny_power_train_val.csv", "test/sunny_power_test.csv", 96, 96, 24, 96, 24),
-    "WP": DatasetSpec("WP", "train/windy_power_train_val.csv", "test/windy_power_test.csv", 96, 96, 24, 96, 24),
+    "BE": DatasetSpec(
+        "BE", "train/EPF_BE_train_val.csv", "test/EPF_BE_test.csv", 168, 24, 24, 48, 48
+    ),
+    "DE": DatasetSpec(
+        "DE", "train/EPF_DE_train_val.csv", "test/EPF_DE_test.csv", 168, 24, 24, 48, 48
+    ),
+    "FR": DatasetSpec(
+        "FR", "train/EPF_FR_train_val.csv", "test/EPF_FR_test.csv", 168, 24, 24, 48, 48
+    ),
+    "NP": DatasetSpec(
+        "NP", "train/EPF_NP_train_val.csv", "test/EPF_NP_test.csv", 168, 24, 24, 48, 48
+    ),
+    "PJM": DatasetSpec(
+        "PJM",
+        "train/EPF_PJM_train_val.csv",
+        "test/EPF_PJM_test.csv",
+        168,
+        24,
+        24,
+        48,
+        48,
+    ),
+    "ETTh1": DatasetSpec(
+        "ETTh1",
+        "train/ETT_ETTh1_train_val.csv",
+        "test/ETT_ETTh1_test.csv",
+        96,
+        96,
+        24,
+        48,
+        24,
+    ),
+    "ETTm1": DatasetSpec(
+        "ETTm1",
+        "train/ETT_ETTm1_train_val.csv",
+        "test/ETT_ETTm1_test.csv",
+        96,
+        96,
+        24,
+        96,
+        24,
+    ),
+    "MOPEX": DatasetSpec(
+        "MOPEX", "train/mopex_train_val.csv", "test/mopex_test.csv", 96, 96, 24, 48, 24
+    ),
+    "SP": DatasetSpec(
+        "SP",
+        "train/sunny_power_train_val.csv",
+        "test/sunny_power_test.csv",
+        96,
+        96,
+        24,
+        96,
+        24,
+    ),
+    "WP": DatasetSpec(
+        "WP",
+        "train/windy_power_train_val.csv",
+        "test/windy_power_test.csv",
+        96,
+        96,
+        24,
+        96,
+        24,
+    ),
 }
 
 
@@ -52,8 +107,11 @@ def normalize_dataset_name(name: str) -> str:
         "mopex": "MOPEX",
         "ettm1": "ETTm1",
         "etth1": "ETTh1",
+        "ettm": "ETTm1",
+        "etth": "ETTh1",
     }
-    return mapping.get(name, name)
+    mapping.update({key.casefold(): key for key in DATASETS})
+    return mapping.get(name.strip().casefold(), name.strip())
 
 
 def resolve_train_path(spec: DatasetSpec) -> Path:
@@ -66,7 +124,6 @@ def resolve_test_path(spec: DatasetSpec) -> Path:
 
 def infer_dataset_from_path(path: str | Path) -> DatasetSpec | None:
     candidate = Path(path)
-    text = str(candidate).lower()
     filename = candidate.name.lower()
     stems = {candidate.stem.lower(), filename}
     for spec in DATASETS.values():
@@ -83,7 +140,7 @@ def infer_dataset_from_path(path: str | Path) -> DatasetSpec | None:
         }
         if filename in aliases or stems & aliases:
             return spec
-        if any(alias in text for alias in aliases):
+        if any(part.lower() in aliases for part in candidate.parts[:-1]):
             return spec
     return None
 

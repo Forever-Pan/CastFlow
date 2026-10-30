@@ -8,4 +8,5 @@ python -m cli evaluate \
   --csv-file predictions/de_forecast.csv \
   --answer-col answer \
   --ground-truth-col ground_truth \
-  --output predictions/de_metrics.csv
+  --output predictions/de_metrics.csv \
+  "$@"

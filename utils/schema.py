@@ -9,12 +9,27 @@ import pandas as pd
 
 @dataclass(slots=True)
 class TimeSeriesWindow:
-    """A leakage-free forecasting window."""
+    """History, optional evaluation labels, and separately issued forecasts.
+
+    ``future`` is reserved for offline labels, never inference evidence.
+    """
 
     history: pd.DataFrame
     future: pd.DataFrame | None
     target_col: str
     timestamp_col: str | None
+    covariate_forecasts: pd.DataFrame | None = None
+    covariate_issued_at: pd.Timestamp | None = None
+
+    @property
+    def forecast_origin(self) -> pd.Timestamp | None:
+        if (
+            self.timestamp_col
+            and self.timestamp_col in self.history
+            and not self.history.empty
+        ):
+            return pd.Timestamp(self.history[self.timestamp_col].iloc[-1])
+        return None
 
     @property
     def target_history(self) -> np.ndarray:
@@ -48,6 +63,8 @@ class WorkflowState:
     forecast_full_response: str = ""
     reflection: str = ""
     retry_count: int = 0
+    history: list[dict[str, Any]] = field(default_factory=list)
+    expected_timestamps: list[str] = field(default_factory=list)
 
     def observation_map(self) -> dict[str, dict[str, Any]]:
         return {obs.tool_name: obs.output for obs in self.observations}
@@ -63,3 +80,7 @@ class ForecastResult:
     forecast_full_prompt: str = ""
     forecast_full_response: str = ""
     metrics: dict[str, float] = field(default_factory=dict)
+    status: str = "accepted"
+    failure_reason: str = ""
+    attempts: int = 1
+    fallback_source: str | None = None

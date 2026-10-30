@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-import time
+import hashlib
+import json
+import math
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,14 +12,19 @@ from typing import Any
 
 import pandas as pd
 
-from evaluation.evaluate import compute_metrics, parse_forecast_value
+from evaluation.evaluate import (
+    aligned_arrays,
+    extract_answer_text,
+    parse_forecast_value,
+)
+from utils.io import atomic_write_csv
 
 
 @dataclass(slots=True)
 class InferenceConfig:
     base_url: str = "http://localhost:8003/v1"
     model: str = "forecast"
-    api_key: str = "test-key"
+    api_key: str = "EMPTY"
     workers: int = 16
     timeout: float = 600.0
     max_tokens: int | None = 5000
@@ -26,88 +34,207 @@ class InferenceConfig:
     output_col: str = "answer_local_LLM"
     resume: bool = True
 
+    def validate(self) -> None:
+        if (
+            isinstance(self.workers, bool)
+            or not isinstance(self.workers, int)
+            or self.workers < 1
+        ):
+            raise ValueError("workers must be a positive integer")
+        if (
+            isinstance(self.max_retries, bool)
+            or not isinstance(self.max_retries, int)
+            or self.max_retries < 1
+        ):
+            raise ValueError("max_retries must be a positive total attempt count")
+        if not math.isfinite(self.timeout) or self.timeout <= 0:
+            raise ValueError("timeout must be finite and positive")
+        if not math.isfinite(self.temperature) or not 0 <= self.temperature <= 2:
+            raise ValueError("temperature must be between 0 and 2")
+        if self.max_tokens is not None and (
+            isinstance(self.max_tokens, bool)
+            or not isinstance(self.max_tokens, int)
+            or self.max_tokens < 1
+        ):
+            raise ValueError("max_tokens must be a positive integer or None")
+        if (
+            not self.model
+            or not self.base_url
+            or not self.prompt_col
+            or not self.output_col
+        ):
+            raise ValueError("endpoint, model and column names must be nonempty")
+        if self.output_col in {
+            self.prompt_col,
+            "idx",
+            "ground_truth",
+            "horizon",
+            "_castflow_input_hash",
+            "full_response",
+            "reasoning",
+            "success",
+            "error",
+            "elapsed",
+            "attempt",
+        }:
+            raise ValueError(
+                "output_col must not overwrite input identifiers or result metadata"
+            )
+
+
+def input_fingerprint(row: pd.Series, config: InferenceConfig) -> str:
+    payload = {
+        "prompt": str(row[config.prompt_col]),
+        "model": config.model,
+        "endpoint": config.base_url,
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
+        "horizon": str(row.get("horizon", "")),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, allow_nan=False).encode("utf-8")
+    ).hexdigest()
+
 
 def run_openai_compatible_inference(
-    input_path: str | Path,
-    output_path: str | Path,
-    config: InferenceConfig,
+    input_path: str | Path, output_path: str | Path, config: InferenceConfig
 ) -> str:
+    config.validate()
     try:
         from openai import OpenAI
     except ImportError as exc:
-        raise RuntimeError("OpenAI-compatible inference requires the openai package") from exc
-
+        raise RuntimeError(
+            "OpenAI-compatible inference requires the openai package"
+        ) from exc
     frame = pd.read_csv(input_path, keep_default_na=False)
-    if config.prompt_col not in frame.columns:
-        raise ValueError(f"prompt column {config.prompt_col!r} not found; columns={list(frame.columns)}")
-    if "idx" not in frame.columns:
+    if frame.empty or config.prompt_col not in frame:
+        raise ValueError(
+            "input must contain at least one row and the configured prompt column"
+        )
+    if "idx" not in frame:
         frame["idx"] = frame.index
-    has_ground_truth = "ground_truth" in frame.columns
-
-    client = OpenAI(api_key=config.api_key, base_url=config.base_url, timeout=config.timeout)
-    existing_results = load_existing_valid_results(output_path, frame, config.output_col) if config.resume else {}
-    rows_to_process = frame[~frame["idx"].isin(existing_results)].copy()
+    numeric = pd.to_numeric(frame["idx"], errors="raise")
+    if (
+        not all(math.isfinite(value) and float(value).is_integer() for value in numeric)
+        or numeric.duplicated().any()
+    ):
+        raise ValueError("idx must contain unique finite integer identifiers")
+    frame["idx"] = numeric.astype("int64")
+    for _, row in frame.iterrows():
+        horizon = requested_horizon(row)
+        target = str(row.get("ground_truth", "")).strip()
+        if target:
+            values = parse_forecast_value(target)
+            if not values or (horizon is not None and len(values) != horizon):
+                raise ValueError(
+                    "ground_truth must contain a complete finite horizon when supplied"
+                )
+    frame["_castflow_input_hash"] = [
+        input_fingerprint(row, config) for _, row in frame.iterrows()
+    ]
+    results = (
+        _load_existing_payloads(output_path, frame, config) if config.resume else {}
+    )
+    client = OpenAI(
+        api_key=config.api_key,
+        base_url=config.base_url,
+        timeout=config.timeout,
+        max_retries=0,
+    )
 
     def call(row: pd.Series) -> tuple[int, dict[str, Any]]:
         idx = int(row["idx"])
-        prompt = str(row[config.prompt_col])
+        started = time.perf_counter()
         last_error = ""
+        answer = full = reasoning = ""
         for attempt in range(1, config.max_retries + 1):
-            started = time.time()
             try:
-                params: dict[str, Any] = {
+                params = {
                     "model": config.model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": [
+                        {"role": "user", "content": str(row[config.prompt_col])}
+                    ],
                     "temperature": config.temperature,
                 }
-                if config.max_tokens:
+                if config.max_tokens is not None:
                     params["max_tokens"] = config.max_tokens
                 response = client.chat.completions.create(**params)
-                text = (response.choices[0].message.content or "").strip()
-                reasoning, answer = parse_response(text)
-                if has_ground_truth:
-                    ground_truth = str(row.get("ground_truth", "")).strip()
-                    if not is_valid_answer(answer, ground_truth):
-                        last_error = "Invalid answer (cannot calculate MSE)"
-                        if attempt < config.max_retries:
-                            continue
-                        return idx, result_payload(config, answer, text, reasoning, False, last_error, started, attempt)
-                return idx, result_payload(config, answer, text, reasoning, True, "", started, attempt)
-            except Exception as exc:  # noqa: BLE001 - preserve API error text for batch diagnosis
-                last_error = f"{type(exc).__name__}: {exc}"
-        return idx, {
-            config.output_col: "",
-            "full_response": "",
-            "reasoning": "",
-            "success": False,
-            "error": last_error,
-            "elapsed": 0.0,
-            "attempt": config.max_retries,
-        }
+                if not response.choices:
+                    raise ValueError("model returned no response choices")
+                choice = response.choices[0]
+                content = (choice.message.content or "").strip()
+                separate_reasoning = (
+                    getattr(choice.message, "reasoning_content", None) or ""
+                )
+                full = (
+                    f"<think>{separate_reasoning}</think>\n{content}"
+                    if separate_reasoning
+                    and not re.search(r"<think\b", content, re.IGNORECASE)
+                    else content
+                )
+                reasoning, answer = parse_response(full)
+                valid = answer_matches_row(answer, row)
+                if getattr(choice, "finish_reason", None) in {
+                    "length",
+                    "content_filter",
+                }:
+                    valid = False
+                if valid:
+                    return idx, result_payload(
+                        config, answer, full, reasoning, True, "", started, attempt
+                    )
+                last_error = "response is absent, malformed, truncated, or not aligned with the requested horizon"
+            except Exception as exc:
+                last_error = (
+                    f"{type(exc).__name__}: {exc}".replace(config.api_key, "[redacted]")
+                    if config.api_key
+                    else type(exc).__name__
+                )
+                status = getattr(exc, "status_code", None)
+                if (
+                    status is not None
+                    and status not in {408, 409, 425, 429}
+                    and status < 500
+                ):
+                    break
+            if attempt < config.max_retries:
+                time.sleep(min(0.25 * 2 ** (attempt - 1), 2.0))
+        return idx, result_payload(
+            config, answer, full, reasoning, False, last_error, started, attempt
+        )
 
-    results: dict[int, dict[str, Any]] = {
-        int(idx): {
-            config.output_col: answer,
-            "full_response": "",
-            "reasoning": "",
-            "success": True,
-            "error": "",
-            "elapsed": 0.0,
-            "attempt": 0,
-        }
-        for idx, answer in existing_results.items()
-    }
-    with ThreadPoolExecutor(max_workers=config.workers) as pool:
-        futures = [pool.submit(call, row) for _, row in rows_to_process.iterrows()]
-        for future in as_completed(futures):
-            idx, result = future.result()
-            results[idx] = result
+    columns = [
+        config.output_col,
+        "full_response",
+        "reasoning",
+        "success",
+        "error",
+        "elapsed",
+        "attempt",
+    ]
 
-    for col in [config.output_col, "full_response", "reasoning", "success", "error", "elapsed", "attempt"]:
-        frame[col] = [results.get(int(idx), {}).get(col, "") for idx in frame["idx"]]
+    def checkpoint() -> None:
+        output = frame.copy()
+        for column in columns:
+            output[column] = [
+                results.get(int(idx), {}).get(column, "") for idx in output["idx"]
+            ]
+        atomic_write_csv(output_path, output)
 
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(output_path, index=False)
+    try:
+        with ThreadPoolExecutor(max_workers=config.workers) as pool:
+            futures = [
+                pool.submit(call, row)
+                for _, row in frame.iterrows()
+                if int(row["idx"]) not in results
+            ]
+            for future in as_completed(futures):
+                idx, result = future.result()
+                results[idx] = result
+                checkpoint()
+        checkpoint()
+    finally:
+        client.close()
     return str(output_path)
 
 
@@ -122,91 +249,121 @@ def result_payload(
     attempt: int,
 ) -> dict[str, Any]:
     return {
-        config.output_col: answer,
+        config.output_col: answer if success else "",
         "full_response": full_response,
         "reasoning": reasoning,
         "success": success,
         "error": error,
-        "elapsed": round(time.time() - started, 4),
+        "elapsed": round(time.perf_counter() - started, 4),
         "attempt": attempt,
     }
 
 
 def parse_response(response_text: str) -> tuple[str, str]:
-    reasoning = ""
-    answer = ""
-    if not response_text:
-        return reasoning, answer
-
-    reasoning_match = re.search(r"<think>(.*?)</think>", response_text, flags=re.DOTALL | re.IGNORECASE)
-    if reasoning_match:
-        reasoning = reasoning_match.group(1).strip()
-
-    answer_match = re.search(r"<answer>(.*?)</answer>", response_text, flags=re.DOTALL | re.IGNORECASE)
-    if answer_match:
-        answer = answer_match.group(1).strip()
-
-    if not answer:
-        code_block = re.search(r"```(?:json)?\s*([\s\S]*?)```", response_text)
-        if code_block and re.search(r'"\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}"', code_block.group(1)):
-            answer = code_block.group(1).strip()
-    if not answer:
-        answer = extract_json_object_with_timestamps(response_text)
-    return reasoning, answer
+    if not isinstance(response_text, str) or not response_text.strip():
+        return "", ""
+    match = re.search(r"<think>(.*?)</think>", response_text, re.DOTALL | re.IGNORECASE)
+    reasoning = match.group(1).strip() if match else ""
+    answer = extract_answer_text(response_text)
+    return reasoning, answer if parse_forecast_value(answer) else ""
 
 
 def extract_json_object_with_timestamps(text: str) -> str:
-    start = text.find("{")
-    while start != -1:
-        depth = 0
-        for idx in range(start, len(text)):
-            if text[idx] == "{":
-                depth += 1
-            elif text[idx] == "}":
-                depth -= 1
-                if depth == 0:
-                    candidate = text[start : idx + 1].strip()
-                    if re.search(r'"\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}"', candidate):
-                        return candidate
-                    break
-        start = text.find("{", start + 1)
+    answer = extract_answer_text(text)
+    parsed = parse_forecast_value(answer)
+    if parsed and all(re.match(r"^\d{4}-\d{2}-\d{2}", str(key)) for key in parsed):
+        return answer
     return ""
 
 
 def is_valid_answer(answer: str, ground_truth: str) -> bool:
-    if not answer.strip() or not ground_truth.strip():
+    """Check schema and timestamp alignment without consulting prediction error."""
+    prediction = parse_forecast_value(answer)
+    target = parse_forecast_value(ground_truth)
+    if not prediction or not target:
         return False
-    metrics = compute_metrics(parse_forecast_value(answer), parse_forecast_value(ground_truth))
-    return not pd.isna(metrics["mse"])
+    try:
+        aligned_arrays(prediction, target)
+    except (ValueError, TypeError, OverflowError):
+        return False
+    return True
 
 
-def load_existing_valid_results(
-    output_path: str | Path,
-    input_frame: pd.DataFrame,
-    output_col: str,
-) -> dict[int, str]:
+def answer_matches_row(answer: str, row: pd.Series) -> bool:
+    prediction = parse_forecast_value(answer)
+    if not prediction:
+        return False
+    horizon = requested_horizon(row)
+    if horizon is not None and len(prediction) != horizon:
+        return False
+    if str(row.get("ground_truth", "")).strip():
+        return is_valid_answer(answer, str(row["ground_truth"]))
+    return True
+
+
+def requested_horizon(row: pd.Series) -> int | None:
+    raw = row.get("horizon", "")
+    if not str(raw).strip():
+        return None
+    value = float(raw)
+    if not math.isfinite(value) or not value.is_integer() or value < 1:
+        raise ValueError("row horizon must be a positive integer")
+    return int(value)
+
+
+def _load_existing_payloads(
+    output_path: str | Path, input_frame: pd.DataFrame, config: InferenceConfig
+) -> dict[int, dict[str, Any]]:
     path = Path(output_path)
     if not path.exists():
         return {}
-    try:
-        existing = pd.read_csv(path, keep_default_na=False)
-    except Exception:
+    existing = pd.read_csv(path, keep_default_na=False)
+    required = {"idx", config.output_col, "_castflow_input_hash", "success"}
+    if not required.issubset(existing):
         return {}
-    if "idx" not in existing.columns or output_col not in existing.columns:
-        return {}
-    if "ground_truth" not in existing.columns and "ground_truth" in input_frame.columns:
-        existing = existing.merge(input_frame[["idx", "ground_truth"]], on="idx", how="left")
-
-    has_ground_truth = "ground_truth" in existing.columns
-    results: dict[int, str] = {}
+    if existing["idx"].duplicated().any():
+        raise ValueError("resume file contains duplicate row identifiers")
+    expected = {int(row["idx"]): row for _, row in input_frame.iterrows()}
+    results = {}
     for _, row in existing.iterrows():
-        answer = str(row.get(output_col, "")).strip()
-        if not answer or answer.lower() == "nan":
+        idx = int(row["idx"])
+        source = expected.get(idx)
+        if source is None or str(row["success"]).lower() not in {"true", "1"}:
             continue
-        if has_ground_truth and not is_valid_answer(answer, str(row.get("ground_truth", "")).strip()):
+        if row["_castflow_input_hash"] != source["_castflow_input_hash"]:
             continue
-        try:
-            results[int(row["idx"])] = answer
-        except (TypeError, ValueError):
+        answer = str(row[config.output_col])
+        if not answer_matches_row(answer, source):
             continue
+        results[idx] = {
+            column: row.get(column, "")
+            for column in [
+                config.output_col,
+                "full_response",
+                "reasoning",
+                "success",
+                "error",
+                "elapsed",
+                "attempt",
+            ]
+        }
     return results
+
+
+def load_existing_valid_results(
+    output_path: str | Path, input_frame: pd.DataFrame, output_col: str
+) -> dict[int, str]:
+    """Return answers only when saved prompts match the supplied input rows."""
+    config = InferenceConfig(output_col=output_col)
+    frame = input_frame.copy()
+    if "idx" not in frame:
+        frame["idx"] = frame.index
+    if config.prompt_col not in frame:
+        return {}
+    frame["_castflow_input_hash"] = [
+        input_fingerprint(row, config) for _, row in frame.iterrows()
+    ]
+    return {
+        idx: row[output_col]
+        for idx, row in _load_existing_payloads(output_path, frame, config).items()
+    }

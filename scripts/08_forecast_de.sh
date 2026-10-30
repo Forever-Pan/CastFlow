@@ -8,4 +8,5 @@ python -m cli forecast \
   --data data/raw/test/EPF_DE_test.csv \
   --anchor-library case_library/EPF_DE/anchor_library.json \
   --memory memory/cross_domain/memory.json \
-  --output predictions/de_forecast.csv
+  --output predictions/de_forecast.csv \
+  "$@"

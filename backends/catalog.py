@@ -17,6 +17,7 @@ from backends.experts import validate_expert_specs
 from utils.io import atomic_write_json
 
 
+# Candidate models may be excluded according to task requirements.
 DEFAULT_MODELS = ("SeasonalNaive", "HistoricAverage", "AutoARIMA", "Theta")
 BALANCED_MODELS = (
     "SeasonalNaive",

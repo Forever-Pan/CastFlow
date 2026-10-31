@@ -286,6 +286,8 @@ prior on a reserved chronological confirmation interval before exploring teacher
 trajectories. The balanced preset combines SeasonalNaive, HistoricAverage,
 AutoARIMA, Theta, Ridge, fresh prefix-trained DLinear variants, and frozen Chronos-Bolt Base.
 Omit the preset for the original four native experts, or choose `--models`.
+Candidate models may be excluded according to task requirements by listing only
+the desired models with `--models`.
 Model fitting, recipe selection, historical-loss calibration, and confirmation
 use separate chronological intervals. Case caps sample across eligible history.
 Stored cases and experience trajectories exclude the final training-side targets.

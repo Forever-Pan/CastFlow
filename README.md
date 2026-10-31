@@ -2,7 +2,7 @@
   <img src="docs/assets/castflow-mark.svg" width="88" alt="CastFlow mark">
   <h1>CastFlow</h1>
   <p><strong>Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting</strong></p>
-  <p>CastFlow is a role-specialized agentic workflow for time series forecasting. It couples a frozen general-purpose reasoning model for planning and reflection with a trainable local forecasting model for evidence-guided numerical refinement.</p>
+  <p>CastFlow bridges experience-guided evidence acquisition and accurate time series prediction. A frozen general-purpose LLM plans tool use and checks forecasts, while a specialized forecasting LLM learns to refine an ensemble prior using diagnostic evidence.</p>
   <p>
     <a href="https://arxiv.org/abs/2604.27840"><kbd><strong>arXiv</strong></kbd></a> &nbsp;
     <a href="https://forever-pan.github.io/CastFlow/assets/paper/CastFlow.pdf"><kbd><strong>Paper PDF</strong></kbd></a> &nbsp;
@@ -21,8 +21,8 @@
 
 ## Start here
 
-CastFlow pairs experience-guided evidence acquisition with a specialized numerical
-forecaster. The paper reports the lowest MSE and MAE on 9 of 10 benchmarks among
+CastFlow couples experience-guided evidence acquisition with prior-conditioned
+numerical refinement. The paper reports the lowest MSE and MAE on 9 of 10 benchmarks among
 21 competing methods. See the [results and comparison table](https://forever-pan.github.io/CastFlow/#results).
 
 - **Read:** [paper PDF](https://forever-pan.github.io/CastFlow/assets/paper/CastFlow.pdf), [arXiv](https://arxiv.org/abs/2604.27840), and [project page](https://forever-pan.github.io/CastFlow/).
@@ -49,12 +49,12 @@ The public implementation exposes the following forecasting roles. SFT and RLVR 
 
 | Component | Workflow |
 | --- | --- |
-| **Planning** | Select diagnostic tools using a frozen external LLM. |
-| **Action** | Execute the multi-view toolkit and build an ensemble forecast baseline. |
-| **Forecasting** | Use a fine-tuned local LLM to refine the baseline into a numerical forecast. |
-| **Reflection** | Validate output structure and evidence alignment, then retry if needed. |
-| **Strategy Memory** | Retrieve successful historical tool-use trajectories. |
-| **Foundational Anchorer** | Retrieve similar historical cases and ensemble classical, deep, and foundation time-series models. |
+| **Planning** | Use retrieved Experience Memory and a frozen LLM to select instance-relevant optional diagnostics. |
+| **Action** | Execute the tool plan, including the mandatory ensemble prior and exogenous analysis tools. |
+| **Forecasting** | Generate a complete refined forecast from the observed lookback, ensemble prior, diagnostic evidence, and retrieved procedural guidance. |
+| **Reflection** | Check output structure and evidence consistency, providing feedback for bounded revision. |
+| **Experience Memory** | Retrieve selected training trajectories as procedural guidance for planning and forecasting. |
+| **Foundational Anchorer** | Retrieve a related historical cluster and weight configured forecasting experts using historical validation loss. |
 
 ## Directory Layout 🗂️
 
@@ -65,7 +65,7 @@ CastFlow/
   utils/                            Runtime config, dataset registry/io, schema, and shared helpers
   evaluation/                       Forecast parsing and metric evaluation
   forecasting/                      Prompting, tool execution, and inference modules
-  workflow/                         End-to-end workflow orchestration and strategy memory
+  workflow/                         End-to-end workflow orchestration and Experience Memory
   training/                         SFT, RLVR, reward, and export utilities
   anchorer/                         Foundational Anchorer case-library construction
   backends/                         External time-series model runtime
@@ -237,8 +237,8 @@ handling of rendered prompts in generated artifacts.
 
 ## Default Parameters 🎛️
 
-The table below describes public-code defaults and example-script settings.
-They do not identify a particular historical experiment run.
+The table below summarizes runtime defaults and the SFT/RLVR settings reported
+in the paper.
 
 | Component | Setting |
 | --- | --- |
@@ -381,7 +381,7 @@ models and writes a case library.
 </details>
 
 <details open>
-<summary><strong>2. Build Cross-Domain Strategy Memory</strong></summary>
+<summary><strong>2. Build Cross-Domain Experience Memory</strong></summary>
 
 Loops over all registered train splits and uses the matching `case_library/*/anchor_library.json`.
 
@@ -396,6 +396,9 @@ Output: `memory/cross_domain/memory.json`
 <details open>
 <summary><strong>3. Export SFT Data From Memory</strong></summary>
 
+Export selected teacher forecasting responses together with their fixed workflow
+context, including observations, diagnostic evidence, and procedural guidance.
+
 ```bash
 bash scripts/03_export_sft.sh
 ```
@@ -407,7 +410,7 @@ Output: `data/sft/cross_domain_sft.csv`
 <details open>
 <summary><strong>4. Supervised Fine-Tuning</strong></summary>
 
-Paper-style target: Qwen3-4B, 1 epoch, learning rate `5e-5`, global batch size 8.
+Reported SFT settings: Qwen3-4B, 1 epoch, learning rate `5e-5`, global batch size 8.
 
 ```bash
 bash scripts/04_train_sft.sh
@@ -426,6 +429,9 @@ bash scripts/05_prepare_rl.sh
 
 Output: `data/rl/cross_domain_rl.parquet`. RL records retain true future labels
 and the matched ensemble prior; teacher responses are not used as labels.
+Each GRPO group samples eight forecasting responses from the same workflow
+context and prior. Rewards score each response's numerical validity, absolute
+MSE, and MSE improvement over that prior.
 
 </details>
 

@@ -4,9 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting</title>
-    <meta name="description" content="CastFlow bridges experience-guided tool reasoning and specialized numerical forecasting with a frozen planner, a multi-view toolkit, and SFT plus RLVR.">
+    <meta name="description" content="CastFlow combines experience-guided evidence acquisition with a specialized LLM trained by SFT and RLVR to refine an ensemble forecasting prior.">
     <meta property="og:title" content="CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting">
-    <meta property="og:description" content="CastFlow bridges experience-guided tool reasoning and specialized numerical forecasting with a frozen planner, a multi-view toolkit, and SFT plus RLVR.">
+    <meta property="og:description" content="CastFlow combines experience-guided evidence acquisition with a specialized LLM trained by SFT and RLVR to refine an ensemble forecasting prior.">
     <meta property="og:type" content="website">
     <link rel="canonical" href="https://forever-pan.github.io/CastFlow/">
     <meta property="og:url" content="https://forever-pan.github.io/CastFlow/">
@@ -14,7 +14,7 @@
     <meta property="og:image:alt" content="CastFlow framework: experience-guided evidence acquisition and specialized forecast refinement">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting">
-    <meta name="twitter:description" content="CastFlow bridges experience-guided tool reasoning and specialized numerical forecasting with a frozen planner, a multi-view toolkit, and SFT plus RLVR.">
+    <meta name="twitter:description" content="CastFlow combines experience-guided evidence acquisition with a specialized LLM trained by SFT and RLVR to refine an ensemble forecasting prior.">
     <meta name="twitter:image" content="https://forever-pan.github.io/CastFlow/assets/figures/rendered/framework.png">
     <meta name="citation_title" content="CastFlow: Bridging Evidence Acquisition and Accurate Prediction in Agentic Time Series Forecasting">
     <meta name="citation_author" content="Bokai Pan">
@@ -83,7 +83,7 @@
       "sameAs": "https://orcid.org/0000-0002-4835-4102"
     }
   ],
-  "description": "CastFlow bridges experience-guided tool reasoning and specialized numerical forecasting with a frozen planner, a multi-view toolkit, and SFT plus RLVR.",
+  "description": "CastFlow combines experience-guided evidence acquisition with a specialized LLM trained by SFT and RLVR to refine an ensemble forecasting prior.",
   "inLanguage": "en",
   "encoding": {
     "@type": "MediaObject",
@@ -162,7 +162,7 @@
             <img src="assets/figures/rendered/framework.webp" alt="CastFlow framework overview" loading="eager" width="2938" height="1383" decoding="async" fetchpriority="high">
             <figcaption>
               <strong>CastFlow system overview.</strong>
-              Training-built Experience Memory guides a frozen LLM in planning tool use and checking responses. A multi-view toolkit constructs diagnostic evidence and an ensemble prior, which a specialized forecasting LLM uses to generate refined numerical forecasts. SFT and RLVR update only the forecasting LLM.
+              Training-built Experience Memory guides tool planning and supplies procedural context for forecasting. A frozen LLM plans tool use and checks forecasts. A multi-view toolkit provides diagnostic evidence and an ensemble prior, which a specialized forecasting LLM uses to generate refined numerical forecasts. SFT and RLVR update only the forecasting LLM.
               <a href="assets/figures/framework.pdf">Open PDF</a>
             </figcaption>
           </figure>
@@ -210,19 +210,19 @@
         <div class="container">
           <div class="section-heading centered">
             <p class="eyebrow">Motivation</p>
-            <h2 id="motivation-title">Why a workflow instead of one generation?</h2>
+            <h2 id="motivation-title">Two linked forecasting challenges.</h2>
             <p class="lead">
-              Time series forecasting needs more than fluent explanation. A useful model must identify local patterns, compare similar historical cases, reason about covariates and events, and decide when a baseline should be preserved, shifted, or corrected.
+              An agent must identify which evidence is useful for the current temporal dynamics and translate heterogeneous diagnostic signals into precise numerical predictions. Recognizing a trend or turning point alone does not determine how much each future value should change.
             </p>
           </div>
 
           <div class="split motivation-layout">
             <div class="prose motivation-copy">
             <p>
-              CastFlow therefore exposes the forecasting process as a chain of inspectable states. The workflow keeps reasoning, evidence acquisition, numerical revision, and validation separate, so their roles and intermediate outputs can be inspected and evaluated. Only the forecasting model is updated during SFT and RLVR.
+              CastFlow addresses evidence acquisition through retrieved procedural experience. Selected training trajectories guide a frozen general-purpose LLM in adapting diagnostic tool plans to the current instance, using information available at the forecast origin.
             </p>
             <p>
-              This is the central reason for introducing an agentic workflow: the goal is not to make the model produce longer rationales, but to make forecasting decisions depend on explicit evidence and verifiable intermediate artifacts.
+              Forecasting-specific supervision addresses evidence-to-prediction translation. A specialized LLM conditions on the observed history, diagnostic evidence, and ensemble prior to generate a refined forecast. SFT and RLVR update this forecasting model, while planning and reflection remain frozen.
             </p>
           </div>
           <figure class="paper-figure">
@@ -242,7 +242,7 @@
             <p class="eyebrow">Method</p>
             <h2>A four-role workflow with explicit intermediate artifacts.</h2>
             <p class="lead">
-              CastFlow assigns each part of the forecasting process to the model or module best suited for it, rather than forcing a single LLM call to plan, analyze, forecast, and self-correct at once.
+              A frozen general-purpose LLM plans diagnostic tool use and assesses evidence consistency. Deterministic tool execution supplies the evidence, and a specialized forecasting LLM generates a complete numerical forecast conditioned on that evidence and an ensemble prior.
             </p>
           </div>
 
@@ -250,33 +250,33 @@
             <li>
               <span>01</span>
               <h3>Planning</h3>
-              <p>Retrieves successful historical trajectories from strategy memory and decides which tools are needed for the current lookback window.</p>
+              <p>Uses retrieved Experience Memory to select optional diagnostics for the current lookback, alongside mandatory model auxiliary and exogenous analysis tools.</p>
             </li>
             <li>
               <span>02</span>
               <h3>Action</h3>
-              <p>Executes tools to extract temporal statistics, trend signals, covariate effects, and an ensemble forecast baseline. The residual diagnoser is used only during training.</p>
+              <p>Executes tools to extract temporal statistics, trend signals, covariate associations, and an ensemble forecast prior. The residual diagnoser is used only during training.</p>
             </li>
             <li>
               <span>03</span>
               <h3>Forecasting</h3>
-              <p>Uses the fine-tuned local LLM to revise the ensemble baseline according to retrieved experience, domain context, and tool evidence.</p>
+              <p>Uses the observed lookback, available origin-issued covariate forecasts, diagnostic evidence, and retrieved procedural guidance to refine the ensemble prior with a specialized forecasting LLM.</p>
             </li>
             <li>
               <span>04</span>
               <h3>Reflection</h3>
-              <p>Checks horizon length, output format, and evidence alignment, then triggers bounded correction when the response violates the task contract.</p>
+              <p>Checks forecast structure and evidence consistency, then provides feedback for bounded replanning and revision when checks fail.</p>
             </li>
           </ol>
 
           <div class="method-grid">
             <article>
               <h3>Role specialization</h3>
-              <p>The frozen LLM is preserved for semantic reasoning, tool scheduling, and verification. The trainable local model is reserved for the quantitative subproblem where supervised and reinforcement signals are available: correcting a forecast baseline.</p>
+              <p>The frozen LLM performs tool planning and evidence-consistency assessment. The trainable forecasting LLM translates the resulting context into a complete refined forecast, using the ensemble prior as a numerical starting point.</p>
             </article>
             <article>
               <h3>Memory-guided planning</h3>
-              <p>Successful trajectories are stored as procedural experience. At inference time, similar historical cases help the planner reuse effective tool sequences and avoid starting from scratch on every window.</p>
+              <p>Experience Memory stores selected training trajectories and stays fixed during testing. Retrieved schedules guide diagnostic tool selection, while associated evidence and responses provide procedural context for the specialized forecaster.</p>
             </article>
             <article>
               <h3>Multi-view toolkit</h3>
@@ -298,22 +298,22 @@
                 <tr>
                   <td>Foundational Anchorer</td>
                   <td><code>model_auxiliary_tool</code></td>
-                  <td>Retrieves similar cases and ensembles classical, deep, and foundation time-series models into a stable baseline.</td>
+                  <td>Selects a related historical cluster and combines its configured forecasting experts with softmax weights derived from historical validation losses.</td>
                 </tr>
                 <tr>
                   <td>Statistical and Spectral Profiler</td>
                   <td><code>statistical_analysis_tool</code>, <code>basic_statistics_tool</code>, <code>data_quality_tool</code>, <code>comprehensive_feature_tool</code></td>
-                  <td>Summarizes distribution, missingness, outliers, stationarity, autocorrelation, spectral entropy, and descriptive features.</td>
+                  <td>Summarizes scale, dispersion, robust deviations, quantiles, autocorrelation, spectral entropy, missingness, and descriptive range bounds.</td>
                 </tr>
                 <tr>
                   <td>Dynamics Monitor</td>
                   <td><code>trend_analysis_tool</code>, <code>changepoint_trend_tool</code>, <code>cross_channel_tool</code>, <code>exogenous_analysis_tool</code>, <code>event_summary_tool</code></td>
-                  <td>Detects trend shifts, lead-lag dependencies, covariate effects, and event-level constraints that justify baseline correction.</td>
+                  <td>Summarizes trends, temporal differences, lagged and cross-channel associations, and dominant rise, fall, flat, or oscillation patterns.</td>
                 </tr>
                 <tr>
                   <td>Residual Diagnoser</td>
                   <td><code>autoregressive_residual_tool</code></td>
-                  <td>Analyzes train-only residual patterns to expose systematic baseline errors without test leakage.</td>
+                  <td>Summarizes residual mean and lag-one autocorrelation from an autoregressive proxy fitted to training lookback windows.</td>
                 </tr>
               </tbody>
             </table>
@@ -327,14 +327,14 @@
             <p class="eyebrow">Training</p>
             <h2>Workflow context trains evidence-guided forecasting.</h2>
             <p class="lead">
-              CastFlow collects tool-use experience from training windows. SFT trains the local forecasting model on selected teacher responses conditioned on workflow context. RLVR scores candidate forecasting responses directly; the planner and reflection model remain frozen.
+              CastFlow collects tool-use experience from training windows. SFT trains the specialized forecasting model on selected teacher responses conditioned on workflow context. GRPO scores each candidate's numerical answer under a fixed evidence context and ensemble prior. Planning and reflection remain frozen.
             </p>
           </div>
 
           <div class="training-flow" aria-label="Training pipeline">
             <div>
               <strong>Trajectory collection</strong>
-              <span>K-parallel exploration records plans, tool calls, evidence, and successful corrections.</span>
+              <span>K-parallel exploration retains the lowest-MSE trajectory among candidates passing format and logic checks.</span>
             </div>
             <div>
               <strong>SFT warmup</strong>
@@ -342,11 +342,11 @@
             </div>
             <div>
               <strong>GRPO-based RLVR</strong>
-              <span>Candidate forecasts are optimized with verifiable rewards instead of a learned value model.</span>
+              <span>GRPO samples eight forecasting responses per fixed workflow context and scores each numerical answer directly.</span>
             </div>
             <div>
               <strong>Hybrid MSE reward</strong>
-              <span>Absolute accuracy and improvement over the ensemble baseline are balanced to reward useful correction.</span>
+              <span>Numerical validity, absolute MSE, and MSE improvement over the fixed ensemble prior guide forecast refinement.</span>
             </div>
           </div>
 
@@ -355,7 +355,7 @@
               <img src="assets/figures/rendered/ab_rl.webp" alt="SFT and RLVR ablation results" loading="lazy" width="2124" height="785" decoding="async">
               <figcaption>
                 <strong>Training ablation.</strong>
-                The full model has lower MSE than configurations without SFT or RLVR on every reported dataset. MAE has dataset-dependent exceptions; the frozen planner and reflection model are unchanged.
+                The full SFT-plus-RLVR model has the lowest error in all eight plotted comparisons: MAE on BE, DE, ETTh, and SP, and MSE on NP, PJM, ETTm, and MOPEX. Planning and reflection remain frozen.
                 <a href="assets/figures/ab_rl.pdf">Open PDF</a>
               </figcaption>
             </figure>
@@ -363,7 +363,7 @@
               <img src="assets/figures/rendered/training_metrics.webp" alt="GRPO reward and response length curves" loading="lazy" width="2044" height="748" decoding="async">
               <figcaption>
                 <strong>Optimization dynamics.</strong>
-                Training reward rises while average response length later fluctuates within a bounded range. These statistics describe optimization behavior; they do not directly measure reasoning quality or total computational cost.
+                GRPO reward rises rapidly early in training and then improves more gradually. Average response length initially grows and later fluctuates within a comparatively stable range.
                 <a href="assets/figures/training_metrics.pdf">Open PDF</a>
               </figcaption>
             </figure>
@@ -568,7 +568,7 @@
             <img src="assets/figures/rendered/improve_sample.webp" alt="Forecast trajectories for ensemble baseline, training-free CastFlow, and fine-tuned CastFlow" loading="lazy" width="2149" height="295" decoding="async">
             <figcaption>
               <strong>Forecast trajectory dynamics.</strong>
-              The four windows compare the ensemble prior, training-free CastFlow, and the trained forecaster. They illustrate changes in peak magnitude and local alignment, alongside remaining errors.
+              The four windows compare the ensemble prior, training-free CastFlow, and the trained forecaster, illustrating how evidence-conditioned refinement changes peak magnitude and local alignment.
               <a href="assets/figures/improve_sample.pdf">Open PDF</a>
             </figcaption>
           </figure>
@@ -647,7 +647,7 @@
             <img src="assets/figures/rendered/system_features.webp" alt="Diagnostic runtime and speedups for fresh planning and full-tool plans across BE, DE, ETTh, ETTm, WP, and SP" loading="lazy" width="1480" height="476" decoding="async">
             <figcaption><strong>Diagnostic feature reuse.</strong> Independent computation, all-primitive reuse, and current-plan reuse produce identical diagnostic outputs. <a href="assets/figures/system_features.pdf">Open PDF</a></figcaption>
           </figure>
-          <p class="execution-note">The recovery study uses fixed full-tool plans, deterministic validation, and dataset-specific SFT-plus-RLVR checkpoints. These execution measurements use a separate experiment implementation; see the paper and <a href="https://github.com/Forever-Pan/CastFlow/blob/main/docs/REPRODUCIBILITY.md">runtime notes</a> for their scope.</p>
+          <p class="execution-note">Recovery uses six fixed training windows per dataset, fixed full-tool plans, deterministic validation, greedy decoding, and dataset-specific SFT-plus-RLVR checkpoints. The main forecasting experiment uses a jointly trained model. Timing includes journal I/O and all attempts, excluding service initialization. See the paper and <a href="https://github.com/Forever-Pan/CastFlow/blob/main/docs/REPRODUCIBILITY.md">runtime notes</a> for the execution setup.</p>
         </div>
       </section>
 
@@ -657,19 +657,19 @@
             <p class="eyebrow">Code</p>
             <h2>Repository structure follows the paper workflow.</h2>
             <p class="lead">
-              The public implementation provides entries for case-library construction, experience memory, forecasting-model training, inference, and evaluation. Data, checkpoints, and generated libraries are supplied separately. Public defaults are documented in the repository.
+              The implementation provides <a href="https://github.com/Forever-Pan/CastFlow#one-command-initialization">one-command preparation</a> of expert libraries and cross-domain Experience Memory, followed by forecasting-model training, inference, and evaluation. Configure <a href="https://github.com/Forever-Pan/CastFlow/blob/main/docs/PROMPTS.md">task-specific prompts</a> in an external private pack using the repository's English reference templates. Data and model weights are supplied separately. Initialization writes libraries and memory to the configured runtime directory.
             </p>
           </div>
           <div class="repo-flow" aria-label="Repository workflow">
             <article>
               <span>01</span>
               <h3>Anchorer Library</h3>
-              <p>Build the Foundational Anchorer case library so tool use can start from similar historical examples and ensemble priors.</p>
+              <p>Build historical clusters and model-performance records for selecting and weighting the forecasting experts that produce the ensemble prior.</p>
             </article>
             <article>
               <span>02</span>
-              <h3>Strategy Memory</h3>
-              <p>Construct cross-domain strategy memory from successful planning and tool-use trajectories.</p>
+              <h3>Experience Memory</h3>
+              <p>Construct cross-domain Experience Memory from selected training trajectories, including tool schedules, observations, and forecasting responses.</p>
             </article>
             <article>
               <span>03</span>

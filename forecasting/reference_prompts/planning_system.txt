@@ -1,0 +1,4 @@
+# Public reference template. Adapt this role to your task before use.
+Select tools from the supplied capabilities for the current request.
+Respect required tools and availability constraints.
+Return a machine-readable plan using the supplied output contract.

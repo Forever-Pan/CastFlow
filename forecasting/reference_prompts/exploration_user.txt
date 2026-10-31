@@ -1,0 +1,6 @@
+# Public reference template. Customize the task instructions in your private copy.
+Alternative-plan context:
+{context}
+
+Propose the requested alternatives using only permitted tool names.
+Return only a JSON object with a strategies property containing an array of tool-name arrays.

@@ -18,6 +18,7 @@ from evaluation.evaluate import (
     parse_forecast_value,
 )
 from utils.io import atomic_write_csv
+from utils.messages import resolve_forecast_messages
 
 
 @dataclass(slots=True)
@@ -69,6 +70,10 @@ class InferenceConfig:
             "idx",
             "ground_truth",
             "horizon",
+            "system_prompt",
+            "messages",
+            "prompt_mode",
+            "prompt_fingerprint",
             "_castflow_input_hash",
             "full_response",
             "reasoning",
@@ -84,7 +89,8 @@ class InferenceConfig:
 
 def input_fingerprint(row: pd.Series, config: InferenceConfig) -> str:
     payload = {
-        "prompt": str(row[config.prompt_col]),
+        "messages": row_messages(row, config),
+        "prompt_fingerprint": str(row.get("prompt_fingerprint", "")),
         "model": config.model,
         "endpoint": config.base_url,
         "temperature": config.temperature,
@@ -96,10 +102,23 @@ def input_fingerprint(row: pd.Series, config: InferenceConfig) -> str:
     ).hexdigest()
 
 
+def row_messages(row: pd.Series, config: InferenceConfig) -> list[dict[str, str]]:
+    """Preserve system instructions across batch inference and teacher generation."""
+    task = {
+        "prompt": str(row[config.prompt_col]),
+        "system_prompt": row.get("system_prompt", ""),
+    }
+    if "messages" in row:
+        task["messages"] = row["messages"]
+    return resolve_forecast_messages(task)
+
+
 def run_openai_compatible_inference(
     input_path: str | Path, output_path: str | Path, config: InferenceConfig
 ) -> str:
     config.validate()
+    if Path(input_path).resolve() == Path(output_path).resolve():
+        raise ValueError("inference output must differ from its input")
     try:
         from openai import OpenAI
     except ImportError as exc:
@@ -121,6 +140,7 @@ def run_openai_compatible_inference(
         raise ValueError("idx must contain unique finite integer identifiers")
     frame["idx"] = numeric.astype("int64")
     for _, row in frame.iterrows():
+        row_messages(row, config)
         horizon = requested_horizon(row)
         target = str(row.get("ground_truth", "")).strip()
         if target:
@@ -151,9 +171,7 @@ def run_openai_compatible_inference(
             try:
                 params = {
                     "model": config.model,
-                    "messages": [
-                        {"role": "user", "content": str(row[config.prompt_col])}
-                    ],
+                    "messages": row_messages(row, config),
                     "temperature": config.temperature,
                 }
                 if config.max_tokens is not None:

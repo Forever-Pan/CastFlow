@@ -24,6 +24,7 @@ from utils.io import (
     load_dataset,
 )
 from utils.metrics import mae, mse
+from utils.prompting import prompt_identity
 from workflow.engine import CastFlow, request_identity, bounded_memory_windows
 from workflow.memory import StrategyMemory
 from workflow.recovery import ExecutionJournal, digest
@@ -172,7 +173,12 @@ def preflight_experience_inputs(
                 "covariate_forecasts_sha256": covariate_hash,
             }
         )
-    return {"datasets": checked, "teacher_configured": True}
+    return {
+        "datasets": checked,
+        "teacher_configured": True,
+        "prompt_mode": config.prompt_mode,
+        "prompt_fingerprint": config.prompt_fingerprint,
+    }
 
 
 def initialize_experience_memories(
@@ -230,6 +236,7 @@ def initialize_experience_memories(
         "case_initialization_fingerprint": case_initialization.get("fingerprint"),
         "datasets": [job["identity"] for job in jobs],
         "max_windows": max_windows,
+        "prompt_pack": prompt_identity(config),
     }
     fingerprint = digest(identity)
     suffix = (
@@ -285,6 +292,8 @@ def initialize_experience_memories(
                 "datasets": {record["dataset_name"]: record for record in records},
                 "scope": "training_trajectories_only",
                 "inference_specialist_configured": config.local_forecast_ready(),
+                "prompt_mode": config.prompt_mode,
+                "prompt_fingerprint": config.prompt_fingerprint,
             }
             atomic_write_json(status_path, result)
             return result

@@ -65,6 +65,7 @@ class WorkflowState:
     retry_count: int = 0
     history: list[dict[str, Any]] = field(default_factory=list)
     expected_timestamps: list[str] = field(default_factory=list)
+    forecast_system_prompt: str = ""
 
     def observation_map(self) -> dict[str, dict[str, Any]]:
         return {obs.tool_name: obs.output for obs in self.observations}
@@ -84,3 +85,4 @@ class ForecastResult:
     failure_reason: str = ""
     attempts: int = 1
     fallback_source: str | None = None
+    forecast_system_prompt: str = ""

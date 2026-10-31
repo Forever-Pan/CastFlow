@@ -43,6 +43,9 @@ class CastFlowConfig:
     execution_request_id: str | None = None
     forecasting_model_revision: str | None = None
     reasoning_model_revision: str | None = None
+    prompt_dir: str | None = None
+    prompt_mode: str | None = None
+    prompt_fingerprint: str | None = None
     excellent_mse_threshold: float = 168.0
     excellent_mae_threshold: float = 8.6
 
@@ -105,6 +108,9 @@ class CastFlowConfig:
             self.allow_train_only_tools, bool
         ):
             raise ValueError("API and training-only tool switches must be booleans")
+        from utils.prompting import validate_prompt_config
+
+        validate_prompt_config(self)
 
     @classmethod
     def from_env(cls, **overrides: object) -> "CastFlowConfig":
@@ -161,6 +167,7 @@ class CastFlowConfig:
             or None,
             reasoning_model_revision=values.get("CASTFLOW_REASONING_MODEL_REVISION")
             or None,
+            prompt_dir=values.get("CASTFLOW_PROMPT_DIR") or None,
             excellent_mse_threshold=float(
                 values.get(
                     "EXCELLENT_MSE_THRESHOLD",

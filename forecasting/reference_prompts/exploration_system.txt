@@ -1,0 +1,4 @@
+# Public reference template. Adapt this role to your task before use.
+Propose alternative tool plans using the supplied capabilities and constraints.
+Keep each plan valid for the request and make the alternatives meaningfully distinct.
+Use the supplied machine-readable output contract.

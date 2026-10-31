@@ -38,6 +38,11 @@ def export_memory_training_csv(memory_path: str | Path, output_path: str | Path)
             raise ValueError(f"memory entry {index} is not an object")
         response = entry.get("Forecasting_answer", entry.get("forecast_answer", ""))
         prompt = entry.get("forecast_full_prompt", "")
+        system_prompt = entry.get("forecast_system_prompt", "")
+        if system_prompt is None:
+            system_prompt = ""
+        if not isinstance(system_prompt, str):
+            raise ValueError(f"memory entry {index} has a non-text system prompt")
         if (
             not isinstance(response, str)
             or not response.strip()
@@ -75,6 +80,7 @@ def export_memory_training_csv(memory_path: str | Path, output_path: str | Path)
                 "tool": serialize_forecast(tool),
                 "baseline_forecast": serialize_forecast(baseline) if baseline else "",
                 "prompt": prompt,
+                "system_prompt": system_prompt,
                 "response": response,
                 "reasoning": reasoning,
                 "answer": answer,
@@ -99,6 +105,7 @@ def export_memory_training_csv(memory_path: str | Path, output_path: str | Path)
                 "tool",
                 "baseline_forecast",
                 "prompt",
+                "system_prompt",
                 "response",
                 "reasoning",
                 "answer",

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import math
 import os
 import re
 import tempfile
 from dataclasses import dataclass
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,10 @@ from training.rewards import (
     parse_json_column,
     serialize_forecast,
 )
+from utils.messages import resolve_forecast_messages
+
+
+FLASH_ATTENTION_REQUIREMENT = "flash-attn>=2.6.3,<3"
 
 
 @dataclass(slots=True)
@@ -149,6 +154,12 @@ def normalize_rlvr_frame(frame: pd.DataFrame, dataset_name: str = "") -> pd.Data
         prompt = source["prompt"]
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError(f"RLVR row {index} has an empty/non-text prompt")
+        system_prompt = source.get("system_prompt", "")
+        if system_prompt is None:
+            system_prompt = ""
+        messages = resolve_forecast_messages(
+            {**source, "prompt": prompt, "system_prompt": system_prompt}
+        )
         truth = parse_json_column(source["ground_truth"])
         if not truth:
             raise ValueError(
@@ -177,6 +188,8 @@ def normalize_rlvr_frame(frame: pd.DataFrame, dataset_name: str = "") -> pd.Data
             {
                 "idx": str(source.get("idx", index)),
                 "prompt": prompt,
+                "system_prompt": system_prompt,
+                "messages": messages,
                 "ground_truth": serialize_forecast(truth),
                 "dataset_name": name,
                 "tool": tool if isinstance(tool, str) else serialize_forecast(tool),
@@ -244,10 +257,19 @@ def build_agent_lightning_config(config: RLVRConfig) -> dict[str, Any]:
                     "async_save": False,
                 },
                 "fsdp_config": {
-                    "model_dtype": "bf16",
+                    # Keep master parameters and optimizer states in FP32;
+                    # FSDP casts forward/backward computation to BF16 separately.
+                    "model_dtype": "fp32",
+                    "mixed_precision": {
+                        "param_dtype": "bf16",
+                        "reduce_dtype": "fp32",
+                        "buffer_dtype": "fp32",
+                    },
                     "wrap_policy": {"min_num_params": 100000000},
                     "param_offload": False,
-                    "optimizer_offload": False,
+                    # Keep optimizer moments on CPU between actor updates so
+                    # they do not compete with the rollout weights and KV cache.
+                    "optimizer_offload": True,
                     "fsdp_size": -1,
                 },
             },
@@ -299,6 +321,7 @@ def train_rlvr(config: RLVRConfig) -> None:
         raise ValueError("RLVR training dataset is smaller than train_batch_size")
     configure_training_environment()
     validate_rlvr_hardware(config.n_gpus_per_node)
+    validate_flash_attention_backend()
     try:
         import agentlightning as agl
         from agentlightning.adapter import LlmProxyTraceToTriplet
@@ -319,9 +342,9 @@ def train_rlvr(config: RLVRConfig) -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(config.model_path, trust_remote_code=True)
     for split, frame in (("training", train_frame), ("validation", val_frame)):
-        for index, prompt in enumerate(frame["prompt"]):
+        for index, task in enumerate(frame.to_dict(orient="records")):
             tokens = tokenizer.apply_chat_template(
-                [{"role": "user", "content": prompt}],
+                resolve_forecast_messages(task),
                 tokenize=True,
                 add_generation_prompt=True,
             )
@@ -378,6 +401,48 @@ def validate_rlvr_hardware(n_gpus: int) -> None:
             raise RuntimeError(
                 "the pinned asynchronous BF16 RLVR backend requires NVIDIA Ampere or newer GPUs (compute capability >= 8.0)"
             )
+
+
+def validate_flash_attention_backend() -> None:
+    """Check the FA2 distribution and compiled extension before starting workers."""
+    from packaging.version import InvalidVersion, Version
+
+    installation = (
+        "Install a FlashAttention 2 wheel matching the installed PyTorch/CUDA, "
+        "or install matching PyTorch and a compatible CUDA toolkit first, then "
+        f"run: python -m pip install --no-build-isolation '{FLASH_ATTENTION_REQUIREMENT}'"
+    )
+    try:
+        installed = version("flash-attn")
+    except PackageNotFoundError as exc:
+        raise RuntimeError(
+            "RLVR's pinned VERL actor uses FlashAttention 2, but flash-attn is not installed. "
+            + installation
+        ) from exc
+    try:
+        compatible = Version("2.6.3") <= Version(installed) < Version("3")
+    except InvalidVersion:
+        compatible = False
+    if not compatible:
+        raise RuntimeError(
+            f"RLVR requires {FLASH_ATTENTION_REQUIREMENT}; found {installed}. "
+            + installation
+        )
+    try:
+        backend = importlib.import_module("flash_attn")
+        if not all(
+            callable(getattr(backend, name, None))
+            for name in ("flash_attn_func", "flash_attn_varlen_func")
+        ):
+            raise ImportError(
+                "the FlashAttention 2 kernel entry points are unavailable"
+            )
+    except Exception as exc:
+        raise RuntimeError(
+            "FlashAttention 2 could not load its compiled kernels; its wheel may be incompatible "
+            f"with the installed PyTorch/CUDA ABI ({type(exc).__name__}: {exc}). "
+            + installation
+        ) from exc
 
 
 def load_rlvr_dataframe(dataset_path: str) -> pd.DataFrame:

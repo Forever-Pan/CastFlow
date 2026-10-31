@@ -35,6 +35,7 @@ class StrategyMemory:
         forecast_answer: str = "",
         model_name: str = "",
         dataset_name: str | None = None,
+        forecast_system_prompt: str = "",
     ) -> None:
         idx = (
             int(metrics.get("window_idx", len(self.entries)))
@@ -54,6 +55,7 @@ class StrategyMemory:
                 "tool_calls": legacy_tool_calls(tool_schedule, tool_outputs),
                 "tool_outputs": tool_outputs,
                 "forecast_full_prompt": forecast_full_prompt,
+                "forecast_system_prompt": forecast_system_prompt,
                 "Forecasting_answer": forecast_answer,
                 "model_name": model_name,
                 "metrics": copy.deepcopy(metrics) if metrics else {},

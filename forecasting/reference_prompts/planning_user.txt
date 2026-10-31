@@ -1,0 +1,6 @@
+# Public reference template. Customize the task instructions in your private copy.
+Planning context:
+{context}
+
+Choose an ordered tool plan from the supplied tool names, including all required tools.
+Return only a JSON object with a tools property containing an array of tool names.

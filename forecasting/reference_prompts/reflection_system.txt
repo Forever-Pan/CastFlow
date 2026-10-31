@@ -1,0 +1,4 @@
+# Public reference template. Adapt this role to your task before use.
+Review the submitted forecast against its supplied structural requirements and evidence.
+Base the review on information available in the request context.
+Keep the verdict compatible with the supplied output contract.

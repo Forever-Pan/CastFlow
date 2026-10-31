@@ -28,6 +28,7 @@ safetensors>=0.4.3
 pyarrow>=12
 agentlightning==0.3.0
 verl==0.6.1
+flash-attn>=2.6.3,<3
 
 chronos-forecasting>=2.0,<3
 huggingface-hub>=0.23

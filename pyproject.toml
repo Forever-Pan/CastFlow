@@ -66,6 +66,7 @@ rlvr = [
   "agentlightning==0.3.0",
   "verl==0.6.1",
   "vllm==0.10.2",
+  "flash-attn>=2.6.3,<3",
   "pyarrow>=12",
 ]
 serving = [
@@ -92,6 +93,7 @@ all = [
   "agentlightning==0.3.0",
   "verl==0.6.1",
   "vllm==0.10.2",
+  "flash-attn>=2.6.3,<3",
 ]
 
 [project.scripts]
@@ -100,3 +102,6 @@ castflow = "cli.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["cli*", "anchorer*", "evaluation*", "forecasting*", "backends*", "training*", "utils*", "workflow*"]
+
+[tool.setuptools.package-data]
+forecasting = ["reference_prompts/*.txt"]

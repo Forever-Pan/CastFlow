@@ -1,0 +1,7 @@
+# Public reference template. Customize the task instructions in your private copy.
+Request context:
+{context}
+
+Use the supplied observations and available evidence to form the requested forecast.
+Follow any evidence-attribution requirements in the output contract.
+Return one final <answer> element containing a JSON object with the requested forecast keys in their supplied order and finite numeric values.

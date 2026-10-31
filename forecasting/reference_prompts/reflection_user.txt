@@ -1,0 +1,6 @@
+# Public reference template. Customize the task instructions in your private copy.
+Review context:
+{context}
+
+Check whether the forecast satisfies the provided requirements and is consistent with the supplied evidence.
+Begin the response with PASS or FAIL, followed by a short reason.

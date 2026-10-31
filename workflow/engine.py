@@ -26,6 +26,7 @@ from utils.io import (
     attach_covariate_forecasts,
 )
 from utils.llm import OpenAICompatibleLLM
+from utils.prompting import prompt_identity, render_prompt
 from workflow.memory import StrategyMemory
 from workflow.recovery import ExecutionJournal, digest
 from utils.schema import ForecastResult, TimeSeriesWindow, WorkflowState
@@ -234,6 +235,7 @@ class CastFlow:
                     else invalid_forecast(self.config)
                 )
                 state.forecast_full_prompt = forecast["prompt"]
+                state.forecast_system_prompt = forecast.get("system_prompt", "")
                 state.forecast_full_response = forecast["response"]
                 state.reflection = forecast["feedback"]
                 if structurally_valid(state.forecast, self.config.horizon):
@@ -313,6 +315,7 @@ class CastFlow:
                 values if structurally_valid(values, self.config.horizon) else None
             ),
             "prompt": state.forecast_full_prompt,
+            "system_prompt": state.forecast_system_prompt,
             "response": state.forecast_full_response,
             "feedback": state.reflection,
         }
@@ -575,7 +578,7 @@ class CastFlow:
             return []
         allowed_optional = optional_tool_names(self.config)
         payload = {
-            "task": "Generate diverse alternative optional tool strategies for build-memory K-parallel forecasting.",
+            "role": "exploration",
             "mandatory_tools": PlanningModule.mandatory_tools,
             "optional_tools": allowed_optional,
             "baseline_strategy": baseline_optional,
@@ -588,8 +591,14 @@ class CastFlow:
             "output_contract": {"strategies": [["optional_tool_1", "optional_tool_2"]]},
         }
         response = self.llm.chat(
-            system="You are a CastFlow planning expert. Return only JSON with diverse optional tool strategies.",
-            user=json.dumps(payload, ensure_ascii=False),
+            system=render_prompt(self.config, "exploration_system"),
+            user=render_prompt(
+                self.config,
+                "exploration_user",
+                context=json.dumps(
+                    payload, ensure_ascii=False, allow_nan=False, sort_keys=True
+                ),
+            ),
             max_tokens=self.config.planner_max_tokens,
             temperature=0.3,
         )
@@ -881,6 +890,7 @@ class CastFlow:
                 else ""
             ),
             forecast_full_prompt=result.forecast_full_prompt,
+            forecast_system_prompt=result.forecast_system_prompt,
             forecast_answer=result.forecast_full_response,
             model_name=(
                 ",".join(sorted(aux.get("best_model", {}).keys()))
@@ -890,6 +900,7 @@ class CastFlow:
             dataset_name=self.config.dataset_name,
         )
         entry = self.memory.entries[-1]
+        entry["prompt_pack"] = prompt_identity(self.config)
         if source_origin_row is not None:
             entry["source_origin_row"] = source_origin_row
         entry["source_fingerprint"], entry["build_fingerprint"] = (
@@ -995,6 +1006,9 @@ class CastFlow:
                             else ""
                         ),
                         "prompt": result.forecast_full_prompt,
+                        "system_prompt": result.forecast_system_prompt,
+                        "prompt_mode": self.config.prompt_mode,
+                        "prompt_fingerprint": self.config.prompt_fingerprint,
                         "full_answer": full_answer,
                         "mse": result.metrics.get("mse", ""),
                         "mae": result.metrics.get("mae", ""),
@@ -1173,6 +1187,8 @@ def serialized_forecast(
 def request_identity(
     window: TimeSeriesWindow, config: CastFlowConfig, model: ForecastingModule
 ) -> dict:
+    from utils.prompting import prompt_identity
+
     root = Path(__file__).resolve().parents[1]
     sources = {}
     for folder in (
@@ -1215,6 +1231,7 @@ def request_identity(
         }
     return {
         "history": frame_identity(window.history),
+        "prompt_pack": prompt_identity(config),
         "covariate_forecasts": frame_identity(window.covariate_forecasts),
         "covariate_issued_at": str(window.covariate_issued_at),
         "target": window.target_col,

@@ -632,6 +632,8 @@ def _main(argv: list[str] | None = None) -> int:
                         "input": str(data_path),
                         "anchor_library": str(anchor_path),
                         "entries": len(dataset_entries),
+                        "prompt_mode": config.prompt_mode,
+                        "prompt_fingerprint": config.prompt_fingerprint,
                     }
                 )
             print(
@@ -660,7 +662,13 @@ def _main(argv: list[str] | None = None) -> int:
         )
         print(
             json.dumps(
-                {"memory_entries": len(memory.entries), "output": args.output}, indent=2
+                {
+                    "memory_entries": len(memory.entries),
+                    "output": args.output,
+                    "prompt_mode": config.prompt_mode,
+                    "prompt_fingerprint": config.prompt_fingerprint,
+                },
+                indent=2,
             )
         )
         return 0
@@ -768,6 +776,8 @@ def _main(argv: list[str] | None = None) -> int:
                         "output": args.output,
                         "windows": len(result),
                         "status_counts": dict(Counter(item.status for item in result)),
+                        "prompt_mode": config.prompt_mode,
+                        "prompt_fingerprint": config.prompt_fingerprint,
                         "local_forecasting_model": (
                             config.local_model_name
                             if config.local_forecast_ready()
@@ -787,6 +797,8 @@ def _main(argv: list[str] | None = None) -> int:
                     "failure_reason": result.failure_reason,
                     "tools": result.tool_schedule,
                     "reflection": result.reflection,
+                    "prompt_mode": config.prompt_mode,
+                    "prompt_fingerprint": config.prompt_fingerprint,
                     "local_forecasting_model": (
                         config.local_model_name
                         if config.local_forecast_ready()
@@ -811,9 +823,19 @@ def _main(argv: list[str] | None = None) -> int:
             target_col=config.target_col,
             timestamp_col=config.timestamp_col,
             max_windows=args.max_windows,
+            prompt_config=config,
             **covariate_args(args),
         )
-        print(json.dumps({"output": output}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "output": output,
+                    "prompt_mode": config.prompt_mode,
+                    "prompt_fingerprint": config.prompt_fingerprint,
+                },
+                indent=2,
+            )
+        )
         return 0
 
     if args.command == "evaluate":
@@ -935,6 +957,8 @@ def _initialization_summary(cases: dict, memory: dict | None = None) -> dict:
         "entries",
         "scope",
         "inference_specialist_configured",
+        "prompt_mode",
+        "prompt_fingerprint",
         "promotion_policy",
         "independent_quality_verified",
     )
@@ -1123,6 +1147,11 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--forecast-model-revision", default=None)
     parser.add_argument("--reasoning-model-revision", default=None)
     parser.add_argument(
+        "--prompt-dir",
+        default=None,
+        help="external private prompt directory; otherwise use generic reference templates",
+    )
+    parser.add_argument(
         "--api-timeout",
         type=float,
         default=None,
@@ -1266,6 +1295,7 @@ def config_from_args(args: argparse.Namespace) -> CastFlowConfig:
         "execution_request_id": "request_id",
         "forecasting_model_revision": "forecast_model_revision",
         "reasoning_model_revision": "reasoning_model_revision",
+        "prompt_dir": "prompt_dir",
     }
     values.update({field: getattr(args, name, None) for field, name in fields.items()})
     values["dataset_name"] = spec.name if spec else None

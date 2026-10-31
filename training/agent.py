@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from pathlib import Path
 from typing import Any, cast
@@ -14,6 +15,7 @@ from training.rewards import (
     parse_json_column,
     serialize_forecast,
 )
+from utils.messages import resolve_forecast_messages
 from utils.io import atomic_write_json
 
 
@@ -51,6 +53,7 @@ class LiteAgent(agl.LitAgent[dict[str, Any]]):
         prompt = task["prompt"]
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("RLVR task requires a nonempty prompt")
+        messages = resolve_forecast_messages(task)
         # Transport failures are rollout failures, not low-reward model outputs.
         with OpenAI(
             base_url=base_url,
@@ -60,7 +63,7 @@ class LiteAgent(agl.LitAgent[dict[str, Any]]):
         ) as client:
             response = client.chat.completions.create(
                 model=llm.model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
                 temperature=llm.sampling_parameters.get(
                     "temperature", self.temperature
                 ),
@@ -95,7 +98,11 @@ class LiteAgent(agl.LitAgent[dict[str, Any]]):
         if self.rollout_output_dir is not None:
             mse = calculate_mse(parse_json_column(answer), parse_json_column(truth))
             task_id = hashlib.sha256(
-                (str(task.get("dataset_name", "")) + "\n" + prompt).encode()
+                (
+                    str(task.get("dataset_name", ""))
+                    + "\n"
+                    + json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
+                ).encode()
             ).hexdigest()[:20]
             attempt_id = hashlib.sha256(
                 f"{attempt.rollout_id}:{attempt.attempt.attempt_id}".encode()
@@ -106,6 +113,8 @@ class LiteAgent(agl.LitAgent[dict[str, Any]]):
                     "rollout_id": attempt.rollout_id,
                     "attempt_id": attempt.attempt.attempt_id,
                     "prompt": prompt,
+                    "system_prompt": task.get("system_prompt", "") or "",
+                    "messages": messages,
                     "answer": answer,
                     "ground_truth": truth,
                     "reward": float(reward),

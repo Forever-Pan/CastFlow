@@ -8,6 +8,7 @@ import numpy as np
 from utils.config import CastFlowConfig
 from utils.io import forecast_timestamps
 from utils.llm import OpenAICompatibleLLM
+from utils.prompting import render_prompt
 from utils.schema import ForecastResult, ToolObservation, WorkflowState
 from evaluation.evaluate import (
     cleanup_jsonish,
@@ -54,7 +55,7 @@ class PlanningModule:
 
         user = json.dumps(
             {
-                "task": "Select CastFlow diagnostic tools for leakage-free time-series forecasting.",
+                "role": "planning",
                 "mandatory_tools": self.mandatory_tools,
                 "optional_tools": allowed_optional,
                 "tool_descriptions": {
@@ -79,11 +80,8 @@ class PlanningModule:
             sort_keys=True,
         )
         response = self.llm.chat(
-            system=(
-                "You are the frozen CastFlow planning module. Return only JSON. "
-                "Always include mandatory tools and choose useful optional tools from the given list."
-            ),
-            user=user,
+            system=render_prompt(config, "planning_system"),
+            user=render_prompt(config, "planning_user", context=user),
             max_tokens=config.planner_max_tokens,
             temperature=0.0,
         )
@@ -204,8 +202,10 @@ class ForecastingModule:
             retry_feedback=state.reflection,
             retrieved_memory=state.retrieved_memory[: config.memory_top_k],
             expected_timestamps=expected,
+            prompt_config=config,
         )
         state.forecast_full_prompt = user
+        state.forecast_system_prompt = system
         if not structurally_valid(state.baseline_forecast, config.horizon):
             state.reflection = append_note(
                 state.reflection,
@@ -296,13 +296,16 @@ class ReflectionModule:
         if self.llm is None or not self.llm.available() or state.forecast is None:
             return ""
         payload = {
-            "task": "Validate CastFlow forecast consistency.",
+            "role": "reflection",
             "horizon": config.horizon,
             "tool_schedule": state.tool_schedule,
             "forecast": state.forecast,
             "baseline": state.baseline_forecast,
             "diagnostic_evidence": state.observation_map(),
-            "output_contract": "Return PASS or FAIL followed by one concise reason.",
+            "output_contract": {
+                "format": "verdict_then_reason",
+                "verdicts": ["PASS", "FAIL"],
+            },
         }
         if config.allow_train_only_tools and metrics:
             payload["training_trajectory_metrics"] = {
@@ -311,8 +314,14 @@ class ReflectionModule:
                 if np.isfinite(value)
             }
         response = self.llm.chat(
-            system="You are the frozen CastFlow reflection module. Check format and evidence alignment.",
-            user=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            system=render_prompt(config, "reflection_system"),
+            user=render_prompt(
+                config,
+                "reflection_user",
+                context=json.dumps(
+                    payload, ensure_ascii=False, allow_nan=False, sort_keys=True
+                ),
+            ),
             max_tokens=config.reflection_max_tokens,
             temperature=0.0,
         )
@@ -332,6 +341,7 @@ class ReflectionModule:
             reflection=state.reflection,
             forecast_full_prompt=state.forecast_full_prompt,
             forecast_full_response=state.forecast_full_response,
+            forecast_system_prompt=state.forecast_system_prompt,
         )
 
 

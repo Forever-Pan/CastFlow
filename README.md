@@ -26,7 +26,7 @@ forecaster. The paper reports the lowest MSE and MAE on 9 of 10 benchmarks among
 21 competing methods. See the [results and comparison table](https://forever-pan.github.io/CastFlow/#results).
 
 - **Read:** [paper PDF](https://forever-pan.github.io/CastFlow/assets/paper/CastFlow.pdf), [arXiv](https://arxiv.org/abs/2604.27840), and [project page](https://forever-pan.github.io/CastFlow/).
-- **Set up:** [installation](#installation), [dataset placement](#dataset-placement), and [weight placement](#weight-placement).
+- **Set up:** [installation](#installation), [dataset placement](#dataset-placement), [weight placement](#weight-placement), and [task prompts](docs/PROMPTS.md).
 - **Run:** [end-to-end workflow](#end-to-end-workflow) and [runtime configuration](docs/REPRODUCIBILITY.md).
 - **Cite:** use the [BibTeX entry](#citation) or GitHub's **Cite this repository** panel.
 
@@ -158,6 +158,7 @@ cd CastFlow
 | `einops`, `safetensors` | deep learning / model loading |
 | `pyarrow` | `>=12`, RL parquet I/O |
 | `agentlightning==0.3.0`, `verl==0.6.1` | RLVR |
+| `flash-attn>=2.6.3,<3` | RL actor attention; match the PyTorch/CUDA environment |
 | `vllm==0.10.2` | rollout and local forecasting serving |
 | `chronos-forecasting`, `xgboost`, `lightgbm` | optional named expert adapters |
 
@@ -178,14 +179,30 @@ python -m pip install -e '.[initialization]'
 python -m pip install -e '.[casebank]'
 # Optional expert-model pool:
 python -m pip install -e '.[anchorer]'
-# Optional training and RLVR:
-python -m pip install -e '.[training,rlvr]'
+# Optional SFT:
+python -m pip install -e '.[training]'
 # Use an environment with a compatible PyTorch/CUDA stack for serving:
 python -m pip install -e '.[serving]'
 ```
 
 `requirements.txt` lists the combined dependency set. The optional groups let
 you install only the components you need.
+
+For RLVR, first prepare a PyTorch/CUDA environment compatible with the pinned
+vLLM and VERL stack. Install a
+matching FlashAttention 2 wheel, or build it against that environment before
+installing the RLVR group:
+
+```bash
+python -m pip install --no-build-isolation 'flash-attn>=2.6.3,<3'
+python -m pip install -e '.[training,rlvr]'
+```
+
+Source builds require a compatible CUDA compiler and build tools. Wheels must
+match the Python, PyTorch, CUDA, and binary ABI in use. GPU memory requirements
+also depend on context length, rollout groups, batch sizes, and optimizer state.
+If dependency resolution replaces PyTorch, install the matching FlashAttention
+build again.
 
 Create a private configuration from the credential-free template:
 
@@ -198,6 +215,25 @@ The forecasting endpoint must point to your separately served trained model.
 The forecasting completion limit defaults to 5,000 tokens. See
 [runtime and reproducibility notes](docs/REPRODUCIBILITY.md) for configuration,
 required external assets, and the scope of this public implementation.
+
+### Task prompts
+
+The packaged [reference templates](forecasting/reference_prompts) are newly
+written, generic interface examples. They are not the operational prompts used
+for the paper's experiments. Design the instructions for your own task and keep
+the customized pack outside the checkout:
+
+```bash
+mkdir -p ../castflow_private/prompts
+cp forecasting/reference_prompts/*.txt ../castflow_private/prompts/
+# Edit the private copies for your task, then select that directory:
+export CASTFLOW_PROMPT_DIR="$(cd ../castflow_private/prompts && pwd)"
+```
+
+The workflow also accepts `--prompt-dir /absolute/path/to/private/prompts`.
+Without an override, it uses the generic reference pack. See
+[prompt roles and customization](docs/PROMPTS.md) for the file contract and
+handling of rendered prompts in generated artifacts.
 
 ## Default Parameters 🎛️
 
@@ -233,8 +269,9 @@ The numbered scripts in `scripts/` wrap these commands with the default cross-do
 
 ### One-command initialization
 
-After placing training CSVs and configuring the frozen teacher endpoint in
-`.env`, build the expert libraries and cross-domain experience memory together:
+After placing training CSVs, configuring the frozen teacher endpoint in
+`.env`, and selecting your task-specific prompt pack, build the expert libraries
+and cross-domain experience memory together:
 
 ```bash
 python -m pip install -e '.[casebank]'
@@ -398,6 +435,11 @@ bash scripts/06_train_rlvr.sh
 ```
 
 RLVR uses the pinned CUDA backend on Ampere or newer GPUs with BF16 support.
+The actor retains FP32 master parameters and optimizer state while using BF16
+mixed-precision computation; the reference model uses BF16. Optimizer states
+are offloaded to CPU between updates, trading host RAM and transfer overhead
+for GPU memory headroom. Provision memory
+for the selected context and batch settings rather than GPU count alone.
 Supply a separate held-out training-side validation parquet through
 `RL_VALIDATION_PATH`; its prompts must not overlap the training prompts.
 Output: `models/rl_cross_domain/`.

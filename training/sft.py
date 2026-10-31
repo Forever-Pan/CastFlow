@@ -13,6 +13,7 @@ import pandas as pd
 
 from utils.io import atomic_write_csv
 from evaluation.evaluate import aligned_arrays, parse_forecast_value
+from utils.messages import build_forecast_messages, resolve_forecast_messages
 
 
 RESPONSE_ALIASES = (
@@ -135,6 +136,14 @@ def normalize_sft_frame(df: pd.DataFrame) -> pd.DataFrame:
             f"found {list(df.columns)}"
         )
     out = df.loc[[_usable_training_row(row) for _, row in df.iterrows()]].copy()
+    if "system_prompt" not in out:
+        out["system_prompt"] = ""
+    else:
+        out["system_prompt"] = out["system_prompt"].map(
+            lambda value: "" if value is None else value
+        )
+        if any(not isinstance(value, str) for value in out["system_prompt"]):
+            raise ValueError("SFT system_prompt values must be text")
     available = [col for col in RESPONSE_ALIASES if col in df.columns]
     out["prompt"] = out["prompt"].map(lambda x: x.strip() if isinstance(x, str) else "")
     out["response"] = [
@@ -148,6 +157,10 @@ def normalize_sft_frame(df: pd.DataFrame) -> pd.DataFrame:
         )
         for _, row in out.iterrows()
     ]
+    if "messages" in out:
+        for row in out.to_dict(orient="records"):
+            if row["prompt"].strip() and row["response"].strip():
+                resolve_forecast_messages(row)
     if "ground_truth" in out:
         complete: list[bool] = []
         for _, row in out.iterrows():
@@ -190,7 +203,7 @@ def prepare_sft_csv(input_path: str | Path, output_path: str | Path) -> str:
     if Path(input_path).resolve() == Path(output_path).resolve():
         raise ValueError("SFT output must differ from its input")
     df = normalize_sft_frame(pd.read_csv(input_path, keep_default_na=False))
-    out = df[["prompt", "response"]].copy()
+    out = df[["prompt", "response", "system_prompt"]].copy()
     out = out[out["prompt"].astype(str).str.strip() != ""]
     out = out[out["response"].astype(str).str.strip() != ""]
     if out.empty:
@@ -201,21 +214,24 @@ def prepare_sft_csv(input_path: str | Path, output_path: str | Path) -> str:
 
 def row_to_messages(row: pd.Series) -> dict[str, list[dict[str, str]]]:
     return {
-        "messages": [
-            {"role": "user", "content": str(row["prompt"]).strip()},
-            {"role": "assistant", "content": str(row["response"]).strip()},
-        ]
+        "messages": resolve_forecast_messages(row)
+        + [{"role": "assistant", "content": str(row["response"]).strip()}]
     }
 
 
 def tokenize_forecasting_pair(
-    tokenizer: Any, prompt: str, response: str, max_length: int
+    tokenizer: Any,
+    prompt: str,
+    response: str,
+    max_length: int,
+    *,
+    system_prompt: str = "",
 ) -> dict[str, Any]:
     """Keep the complete teacher response and supervise only its continuation tokens."""
     if not prompt.strip() or not response.strip():
         raise ValueError("SFT prompt and response must be nonempty")
     prompt_text = tokenizer.apply_chat_template(
-        [{"role": "user", "content": prompt}],
+        build_forecast_messages(prompt, system_prompt),
         tokenize=False,
         add_generation_prompt=True,
     )
@@ -292,7 +308,9 @@ def train_sft(config: SFTConfig) -> None:
             raise RuntimeError("LoRA SFT requires peft") from exc
 
     df = load_prompt_response_csv(config.dataset_path)
-    dataset = Dataset.from_list(df[["prompt", "response"]].to_dict(orient="records"))
+    dataset = Dataset.from_list(
+        df[["prompt", "response", "system_prompt"]].to_dict(orient="records")
+    )
 
     tokenizer = AutoTokenizer.from_pretrained(config.model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
@@ -303,7 +321,11 @@ def train_sft(config: SFTConfig) -> None:
 
     def tokenize_chat(example: dict[str, Any]) -> dict[str, Any]:
         return tokenize_forecasting_pair(
-            tokenizer, example["prompt"], example["response"], config.max_length
+            tokenizer,
+            example["prompt"],
+            example["response"],
+            config.max_length,
+            system_prompt=example["system_prompt"],
         )
 
     tokenized = dataset.map(tokenize_chat, remove_columns=dataset.column_names)

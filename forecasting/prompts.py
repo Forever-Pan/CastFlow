@@ -14,10 +14,9 @@ from utils.io import (
     make_windows,
     attach_covariate_forecasts,
     atomic_write_csv,
+    forecast_timestamps,
 )
-
-
-SYSTEM_PROMPT = "You are a time series forecasting expert."
+from utils.prompting import ensure_prompt_config, prompt_identity, render_prompt
 
 
 def generate_prompt_rows(
@@ -31,6 +30,7 @@ def generate_prompt_rows(
     covariate_forecasts_path: str | Path | None = None,
     covariate_issued_at: str | None = None,
     covariate_issue_col: str = "issued_at",
+    prompt_config: Any = None,
 ) -> pd.DataFrame:
     dataset = load_dataset(
         data_path, target_col=target_col, timestamp_col=timestamp_col
@@ -49,6 +49,7 @@ def generate_prompt_rows(
         covariate_forecasts=covariates,
         covariate_issued_at=covariate_issued_at,
         covariate_issue_col=covariate_issue_col,
+        prompt_config=prompt_config,
     )
 
 
@@ -61,7 +62,10 @@ def windows_to_prompt_rows(
     covariate_forecasts: pd.DataFrame | None = None,
     covariate_issued_at: str | None = None,
     covariate_issue_col: str = "issued_at",
+    prompt_config: Any = None,
 ) -> pd.DataFrame:
+    prompt_config = ensure_prompt_config(prompt_config)
+    identity = prompt_identity(prompt_config)
     windows = make_windows(
         dataset,
         lookback=lookback,
@@ -107,7 +111,12 @@ def windows_to_prompt_rows(
                     horizon=horizon,
                     lookback=lookback,
                     tool=tool_context,
+                    prompt_config=prompt_config,
+                    expected_timestamps=forecast_timestamps(window, horizon),
                 ),
+                "system_prompt": render_prompt(prompt_config, "forecast_system"),
+                "prompt_mode": identity["mode"],
+                "prompt_fingerprint": identity["fingerprint"],
                 "target_col": window.target_col,
                 "lookback": lookback,
                 "horizon": horizon,
@@ -124,32 +133,53 @@ def build_forecasting_prompt(
     lookback: int | None = None,
     tool: str | dict[str, Any] = "",
     domain_description: str = "",
+    prompt_config: Any = None,
+    expected_timestamps: list[str] | None = None,
 ) -> str:
-    """Build a prompt close to the original CastFlow SFT/RL prompt."""
-    # Keep the base prompt domain-agnostic. Projects with strong industry priors
-    # should inject them through `domain_description` rather than hard-coding them here.
-    lookback = lookback or len(history)
-    input_json = series_to_json(history, target_col, timestamp_col)
-    tool_text = (
-        tool
-        if isinstance(tool, str)
-        else json.dumps(tool, ensure_ascii=False, sort_keys=True)
+    """Render a user prompt from a private pack or sanitized reference template.
+
+    Adapt the template to the task before using it for production training.
+    Runtime values are serialized as data, never interpreted as template syntax.
+    """
+    prompt_config = ensure_prompt_config(prompt_config)
+    context = {
+        "role": "forecast",
+        "target": target_col,
+        "lookback": lookback or len(history),
+        "horizon": horizon,
+        "sampling_interval": infer_frequency_text(history, timestamp_col),
+        "observed_history": json.loads(
+            series_to_json(history, target_col, timestamp_col)
+        ),
+        "tool_evidence": tool,
+        "task_context": domain_description,
+        "output_contract": forecast_output_contract(horizon, expected_timestamps),
+    }
+    return render_prompt(
+        prompt_config,
+        "forecast_user",
+        context=json.dumps(
+            context, ensure_ascii=False, allow_nan=False, sort_keys=True
+        ),
     )
-    frequency_text = infer_frequency_text(history, timestamp_col)
-    task_text = infer_task_text(target_col, history.columns)
-    return f"""
-You are a time series forecasting expert.
-Your current task is to {task_text}.
-{domain_description}
-Please predict the upcoming {horizon} time points based on the historical time series of {lookback} time points.
-The timestamps increment by {frequency_text}.
-The current input segment of the historical time series is as follows: {input_json}.
-The tool invocation type and tool output results are as follows: {tool_text}.
-Use the model reasoning channel to analyze the history before producing the final answer.
-During the thinking process, you need to consider the information provided by the tools (if any);
-record the relevant tool evidence in a tool_think element within the reasoning.
-Place the results inside <answer></answer>; the format must contain exactly {horizon} time points.
-""".strip()
+
+
+def forecast_output_contract(
+    horizon: int, timestamps: list[str] | None
+) -> dict[str, Any]:
+    keys = list(timestamps) if timestamps else [str(i) for i in range(horizon)]
+    if len(keys) != horizon or len(set(keys)) != horizon:
+        raise ValueError(
+            "forecast timestamp count or uniqueness does not match the horizon"
+        )
+    return {
+        "container": "answer",
+        "encoding": "json_object",
+        "keys": keys,
+        "values": "finite_numbers",
+        "length": horizon,
+        "evidence_element": "tool_think",
+    }
 
 
 def build_api_forecasting_messages(
@@ -164,9 +194,10 @@ def build_api_forecasting_messages(
     future: pd.DataFrame | None = None,
     retrieved_memory: list[dict[str, Any]] | None = None,
     expected_timestamps: list[str] | None = None,
+    prompt_config: Any = None,
 ) -> tuple[str, str]:
-    """Build API messages using the detailed CastFlow forecasting prompt style."""
-    input_json = series_to_json(history, target_col, timestamp_col)
+    """Render neutral request data through the selected task-specific prompt pack."""
+    prompt_config = ensure_prompt_config(prompt_config)
     tool_section = build_tool_section(tool_outputs, tool_schedule)
     exogenous_context = build_future_exogenous_context(
         future=future,
@@ -175,67 +206,49 @@ def build_api_forecasting_messages(
         tool_outputs=tool_outputs,
         horizon=horizon,
     )
-    if exogenous_context:
-        tool_section = insert_exogenous_context(tool_section, exogenous_context)
-    frequency_text = infer_frequency_text(history, timestamp_col)
-    lookback = lookback or len(history)
-    retry_context = ""
-    if retry_feedback:
-        retry_context = f"""
-
-## Previous Attempt Feedback
-The previous attempt had issues. Please fix all issues below:
-{retry_feedback}
-"""
-
-    keys = expected_timestamps or [str(i) for i in range(horizon)]
-    if len(keys) != horizon:
-        raise ValueError("forecast timestamp count does not match the horizon")
-    user_message = "\n".join(
-        [
-            "## Task",
-            f"Generate a complete {horizon}-point numerical forecast from the observed {lookback}-point lookback.",
-            f"Sampling interval: {frequency_text}.",
-            "## Output contract",
-            f"Return one final <answer> JSON object </answer> with exactly {horizon} finite numeric values.",
-            "Use these keys in this order: " + json.dumps(keys, ensure_ascii=False),
-            "Use the model's reasoning channel when available. Tool-based reasoning may be recorded in a tool_think element.",
-            "Do not place sample answers inside the final answer element. Do not output arithmetic expressions, missing values, or additional forecast points.",
-            "## Observed history",
-            input_json,
-            "## Current request tool evidence",
-            tool_section or "No current tool evidence is available.",
-            "## Historical procedural examples (training windows only)",
-            json.dumps(
-                procedural_guidance(retrieved_memory or []),
-                ensure_ascii=False,
-                allow_nan=False,
-                sort_keys=True,
+    context = json.dumps(
+        {
+            "role": "forecast",
+            "target": target_col,
+            "lookback": lookback or len(history),
+            "horizon": horizon,
+            "sampling_interval": infer_frequency_text(history, timestamp_col),
+            "observed_history": json.loads(
+                series_to_json(history, target_col, timestamp_col)
             ),
-            "Archived values and answers describe past training instances. They are guidance for using tools, not observations or targets for this request.",
-            retry_context,
-            "## Forecasting instructions",
-            "Use the ensemble forecasting prior as the numerical starting point. Interpret the current diagnostics and any supplied origin-issued covariate forecasts when deciding whether and how to refine it.",
-            "Preserve or adjust the prior only as supported by the current evidence. Diagnostic statistics describe the observations; they do not prescribe a fixed correction formula or guarantee forecast accuracy.",
-            "Generate the complete final numerical forecast. Do not assume that qualitative trend, correlation, or historic residual signals identify unknown future errors.",
-        ]
+            "tool_evidence": json.loads(tool_section),
+            "issued_covariate_forecasts": (
+                json.loads(exogenous_context) if exogenous_context else {}
+            ),
+            "historical_procedural_examples": procedural_guidance(
+                retrieved_memory or []
+            ),
+            "previous_attempt_feedback": retry_feedback,
+            "output_contract": forecast_output_contract(horizon, expected_timestamps),
+        },
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
     )
-
-    user_message = re.sub(
+    # Historical response delimiters are data, not current reasoning-channel controls.
+    context = re.sub(
         r"</?think\s*>",
         lambda match: (
             "[historical reasoning]"
             if not match.group(0).startswith("</")
             else "[/historical reasoning]"
         ),
-        user_message,
+        context,
         flags=re.IGNORECASE,
     )
-    return SYSTEM_PROMPT, user_message
+    return (
+        render_prompt(prompt_config, "forecast_system"),
+        render_prompt(prompt_config, "forecast_user", context=context),
+    )
 
 
 def build_tool_section(tool_outputs: dict[str, Any], tool_schedule: list[str]) -> str:
-    blocks: list[str] = []
+    blocks: dict[str, Any] = {}
     for name in tool_schedule:
         output: Any = tool_outputs.get(name, {})
         if name == "model_auxiliary_tool" and isinstance(output, dict):
@@ -243,19 +256,8 @@ def build_tool_section(tool_outputs: dict[str, Any], tool_schedule: list[str]) -
             if prior is None:
                 prior = output.get("ensemble_forecast_baseline")
             output = {"reference_prediction": prior}
-        blocks.append(
-            "\n".join(
-                [
-                    f"### {name}",
-                    f"- Description: {tool_description(name)}",
-                    "",
-                    "```json",
-                    json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True),
-                    "```",
-                ]
-            )
-        )
-    return "\n\n".join(blocks)
+        blocks[name] = {"description": tool_description(name), "output": output}
+    return json.dumps(blocks, ensure_ascii=False, allow_nan=False, sort_keys=True)
 
 
 def build_future_exogenous_context(
@@ -314,54 +316,45 @@ def build_future_exogenous_context(
         }
     if not exog_sequences:
         return ""
-    return "\n".join(
-        [
-            "**Origin-issued covariate forecasts for the prediction horizon:**",
-            f"- Correlations describe the observed lookback. These separately supplied forecasts are aligned to the {horizon}-step horizon and were issued no later than the forecast origin.",
-            "",
-            "```json",
-            json.dumps(exog_sequences, ensure_ascii=False, separators=(",", ":")),
-            "```",
-            "",
-            "**Exogenous stats (future window):**",
-            "",
-            "```json",
-            json.dumps(exog_stats, ensure_ascii=False, separators=(",", ":")),
-            "```",
-        ]
+    return json.dumps(
+        {
+            "values": exog_sequences,
+            "statistics": exog_stats,
+            "horizon": horizon,
+            "availability": "origin_issued_forecasts",
+        },
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
     )
 
 
 def insert_exogenous_context(tool_section: str, exogenous_context: str) -> str:
-    for marker in ("### exogenous_analysis_tool", "### exogenous_analysis"):
-        start = tool_section.find(marker)
-        if start == -1:
-            continue
-        next_block = tool_section.find("\n### ", start + len(marker))
-        insert_at = next_block if next_block != -1 else len(tool_section)
-        return (
-            tool_section[:insert_at]
-            + "\n\n"
-            + exogenous_context
-            + "\n"
-            + tool_section[insert_at:]
-        )
-    return tool_section + "\n\n" + exogenous_context
+    """Merge serialized neutral evidence without adding private instructions."""
+    return json.dumps(
+        {
+            "tools": json.loads(tool_section or "{}"),
+            "covariate_forecasts": json.loads(exogenous_context or "{}"),
+        },
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+    )
 
 
 def tool_description(name: str) -> str:
     descriptions = {
-        "model_auxiliary_tool": "Base prediction tool: generates reference_prediction as the primary ensemble forecast baseline.",
-        "exogenous_analysis_tool": "Analyzes correlations between exogenous variables and the target variable.",
-        "statistical_analysis_tool": "Calculates mean, std, min, max, and range for validating prediction boundaries.",
-        "trend_analysis_tool": "Analyzes trend direction and trend strength.",
-        "basic_statistics_tool": "Extracts median, MAD, ACF, spectral entropy, and quantiles.",
-        "changepoint_trend_tool": "Detects structural breaks, momentum, and recent trend changes.",
-        "autoregressive_residual_tool": "Analyzes autoregressive residuals for systematic bias and nonlinear patterns.",
-        "cross_channel_tool": "Analyzes cross-channel correlation and lead-lag relationships.",
-        "data_quality_tool": "Assesses missingness, constant channels, and clipping boundaries.",
-        "event_summary_tool": "Identifies dominant rise/fall/flat/oscillation pattern.",
-        "comprehensive_feature_tool": "Aggregates multi-view diagnostic evidence.",
+        "model_auxiliary_tool": "Reference forecast.",
+        "exogenous_analysis_tool": "Observed auxiliary-variable associations.",
+        "statistical_analysis_tool": "Observed distribution summary.",
+        "trend_analysis_tool": "Observed trend summary.",
+        "basic_statistics_tool": "Observed temporal statistics.",
+        "changepoint_trend_tool": "Observed change indicators.",
+        "autoregressive_residual_tool": "Training-side residual summary.",
+        "cross_channel_tool": "Observed cross-channel summary.",
+        "data_quality_tool": "Input quality summary.",
+        "event_summary_tool": "Observed variation summary.",
+        "comprehensive_feature_tool": "Combined diagnostic data.",
     }
     return descriptions.get(name, "CastFlow diagnostic tool.")
 
@@ -399,7 +392,10 @@ def write_prompt_csv(
     covariate_forecasts_path: str | Path | None = None,
     covariate_issued_at: str | None = None,
     covariate_issue_col: str = "issued_at",
+    prompt_config: Any = None,
 ) -> str:
+    if Path(data_path).resolve() == Path(output_path).resolve():
+        raise ValueError("prompt output must differ from its source dataset")
     rows = generate_prompt_rows(
         data_path,
         lookback=lookback,
@@ -411,6 +407,7 @@ def write_prompt_csv(
         covariate_forecasts_path=covariate_forecasts_path,
         covariate_issued_at=covariate_issued_at,
         covariate_issue_col=covariate_issue_col,
+        prompt_config=prompt_config,
     )
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     atomic_write_csv(output_path, rows)

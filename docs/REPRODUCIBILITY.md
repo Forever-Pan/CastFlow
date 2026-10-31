@@ -7,6 +7,21 @@ preparation and the core CLI run on CPU; SFT, RLVR, and local 4B serving require
 their selected runtime dependencies and suitable hardware. Install only the
 optional groups needed by the chosen experts and workflow stages.
 
+For RLVR, prepare a PyTorch/CUDA environment compatible with the pinned vLLM and
+VERL stack before installing
+FlashAttention 2 and the training extras. A matching prebuilt wheel is suitable;
+when building from source, use the installed PyTorch environment:
+
+```bash
+python -m pip install --no-build-isolation 'flash-attn>=2.6.3,<3'
+python -m pip install -e '.[training,rlvr]'
+```
+
+The CUDA compiler and binary ABI must match the environment. The native
+initializer and case-bank dependency groups do not require FlashAttention.
+If installing another dependency replaces PyTorch, rebuild or reinstall the
+matching FlashAttention package.
+
 Supply chronologically split CSVs, model weights, and generated libraries
 separately. These assets are not part of the source checkout. The registered
 filenames and window settings are in `utils/registry.py`; ETTh/ETTm resolve to
@@ -186,6 +201,21 @@ Registered datasets retain separate anchor and memory stride defaults from the
 registry. In custom manifests, `memory_stride` defaults to `stride`; an explicit
 CLI `--stride` sets both.
 
+## Task-specific prompts
+
+Configure `CASTFLOW_PROMPT_DIR` or pass `--prompt-dir` to use a complete prompt
+pack in an external private directory. The checkout supplies only newly written
+generic [reference templates](../forecasting/reference_prompts), with their
+roles and formatting contract documented in [PROMPTS.md](PROMPTS.md). These
+examples are not the paper's operational prompt set. Customize them for the
+task, input semantics, and chosen models before using the LLM workflow.
+
+The loader validates the selected files and records content fingerprints for
+runtime identity. Changing a prompt therefore changes the identity used for
+recovery. Generated memory, training CSVs, and request journals may contain
+rendered prompts; keep those artifacts with the private runtime files rather
+than publishing them with the reference pack.
+
 ## Model endpoints and generation
 
 The external endpoint configured in `.env` supplies frozen planning, reflection,
@@ -252,7 +282,15 @@ there is no separately learned tool-call reward. Residual diagnostics remain
 restricted to training-side exploration.
 
 The pinned RLVR backend requires CUDA GPUs with compute capability 8.0 or newer
-and BF16 support. SFT separately chooses a supported precision and can run on CPU.
+and BF16 support. The actor retains FP32 master parameters and optimizer state;
+its mixed-precision computation uses BF16, with FP32 reduction and buffers. The
+reference model uses BF16. Optimizer offload is enabled: optimizer states move
+to CPU between updates, reducing their GPU residency at the cost of host RAM
+and CPU/GPU transfers. Provide sufficient host memory for that state. Capacity
+depends on context length, rollout group and
+batch sizes, sharding, and optimizer state; a device count alone does not
+establish that a long-context run will fit. SFT separately chooses a supported
+precision and can run on CPU.
 Before GRPO batch construction, CastFlow checks complete candidate groups,
 explicit finite rewards, one response trace per candidate, token limits, and
 identical prompt tokens within each group. Missing candidates fail explicitly
